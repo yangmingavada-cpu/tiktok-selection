@@ -6,37 +6,27 @@ import { ArrowLeft, Refresh, Clock, Loading, CircleCheck, CircleClose, Remove, V
 import { marked } from 'marked'
 import { useSession } from '@/composables/useSession'
 import { getStatusLabel, getStatusTagType } from '@/constants'
-import type { ColumnDim } from '@/types'
+import UniverSheet from '@/components/UniverSheet.vue'
 
 const route = useRoute()
 const sessionId = computed(() => route.params.id as string)
 
+const univerSheetRef = ref<InstanceType<typeof UniverSheet>>()
+
 const {
   session, steps, tableData, tableCols, currentView,
   fetchSession, fetchSteps,
-  handleExport, handleSavePlan,
+  handleSavePlan,
 } = useSession(sessionId)
+
+function handleExport() {
+  univerSheetRef.value?.exportExcel()
+}
 
 const savePlanVisible = shallowRef(false)
 const saving = shallowRef(false)
 const planForm = reactive({ name: '', description: '' })
 
-function formatCell(col: ColumnDim, val: unknown): string {
-  if (val === null || val === undefined) return '-'
-  if (col.type === 'number'  && typeof val === 'number') return val.toLocaleString()
-  if (col.type === 'percent' && typeof val === 'number') return val.toFixed(1) + '%'
-  if (col.type === 'score'   && typeof val === 'number') return val.toFixed(1)
-  return String(val)
-}
-
-function cellClass(col: ColumnDim, val: unknown): string {
-  if (col.type === 'score' && typeof val === 'number') {
-    if (val >= 80) return 'score-high'
-    if (val >= 60) return 'score-mid'
-    return 'score-low'
-  }
-  return ''
-}
 
 async function confirmSavePlan() {
   saving.value = true
@@ -217,31 +207,11 @@ function formatBlockType(type: string): string {
       </div>
 
       <div class="table-wrap">
-        <el-table
-          v-if="tableData.length > 0"
-          :data="tableData"
-          stripe
-          border
-          height="100%"
-          style="width: 100%"
-        >
-          <el-table-column type="index" width="50" fixed="left" />
-          <el-table-column
-            v-for="col in tableCols"
-            :key="col.id"
-            :prop="col.id"
-            :label="col.label"
-            :min-width="col.type === 'number' || col.type === 'score' ? 100 : 140"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              <span :class="cellClass(col, row[col.id])">
-                {{ formatCell(col, row[col.id]) }}
-              </span>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-else description="暂无数据" :image-size="120" />
+        <UniverSheet
+          ref="univerSheetRef"
+          :table-cols="tableCols"
+          :table-data="tableData"
+        />
       </div>
     </div>
 
@@ -432,9 +402,6 @@ function formatBlockType(type: string): string {
   overflow: hidden;
 }
 
-.score-high { color: #67c23a; font-weight: 600; }
-.score-mid  { color: #e6a23c; font-weight: 600; }
-.score-low  { color: #f56c6c; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

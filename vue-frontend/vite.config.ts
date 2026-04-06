@@ -9,6 +9,9 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
+  optimizeDeps: {
+    exclude: ['@univerjs/engine-render', '@univerjs/engine-formula'],
+  },
   server: {
     port: 3000,
     host: '0.0.0.0',
