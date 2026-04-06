@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/tiktok_selection?currentSchema=db_core&stringtype=unspecified
+    username: tiktok_app
+    password: ${DB_PASSWORD}
+
+  data:
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASSWORD}
+
+python:
+  ai:
+    base-url: http://python-ai:8000
+
+mcp:
+  internal:
+    self-url: http://java-backend:8080

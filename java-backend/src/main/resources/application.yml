@@ -1,0 +1,107 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: tiktok-selection
+
+  # PostgreSQL datasource (single DB tiktok_selection, 5 schemas inside)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tiktok_selection?currentSchema=db_core&stringtype=unspecified
+    username: tiktok_app
+    # 密码必须通过环境变量注入，禁止在配置文件中硬编码明文密码（安全规约第10条）
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # Redis
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 5000
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+
+# MyBatis-Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: assign_uuid
+      logic-delete-field: deleteTime
+      logic-delete-value: "NOW()"
+      logic-not-delete-value: "NULL"
+    banner: false
+  type-aliases-package: com.tiktok.selection.entity
+  type-handlers-package: com.tiktok.selection.config
+
+# JWT
+jwt:
+  # 密钥必须通过环境变量注入，禁止在配置文件中硬编码（安全规约第10条）
+  secret: ${JWT_SECRET}
+  expiration: 86400000   # 24 hours in ms
+  header: Authorization
+  prefix: "Bearer "
+
+# Echotik
+echotik:
+  api:
+    base-url: ${ECHOTIK_API_BASE_URL:}
+  key-pool:
+    cache-ttl: 60        # seconds, Redis cache TTL for key pool
+    alert-threshold: 1000
+    flush-interval: 60   # seconds, buffer flush to DB interval
+
+# Python AI Service
+python:
+  ai:
+    base-url: ${PYTHON_AI_URL:http://localhost:8000}
+
+# MCP 内部端点认证（安全规约第1条：P0-2修复）
+# 生成示例：openssl rand -hex 32
+# Python Agent 调用时须在请求头携带：X-MCP-Token: <值>
+mcp:
+  internal:
+    secret-token: ${MCP_INTERNAL_TOKEN}
+    self-url: ${MCP_SELF_URL:http://localhost:8080}
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
+# 用户记忆文件存储根目录（后续迁移 OSS 时只需替换 MemoryFileService 实现）
+memory:
+  root: ${MEMORY_ROOT:/data/memory}
+
+# 敏感数据加密（安全规约第10条：P0-1修复）
+# AES-256-GCM 密钥，32字节随机值的Base64编码
+# 生成示例：openssl rand -base64 32
+encrypt:
+  aes:
+    secret-key: ${AES_SECRET_KEY}
+
+logging:
+  level:
+    com.tiktok.selection: DEBUG
+    com.baomidou.mybatisplus: DEBUG
+
+ai:
+  budget:
+    intent-parse-token-quota: ${INTENT_PARSE_TOKEN_QUOTA:200000}
+    intent-interpret-token-quota: ${INTENT_INTERPRET_TOKEN_QUOTA:6000}
+    session-execute-token-quota: ${SESSION_EXECUTE_LLM_TOKEN_QUOTA:120000}
