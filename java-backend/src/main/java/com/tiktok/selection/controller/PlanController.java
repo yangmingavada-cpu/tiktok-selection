@@ -98,6 +98,9 @@ public class PlanController {
 
         Session session = sessionService.createSession(userId, req);
 
+        // 启动执行
+        sessionService.executeSession(session.getId(), userId);
+
         // 记录最近使用时间
         plan.setLastUsedTime(LocalDateTime.now());
         plan.setUseCount(plan.getUseCount() == null ? 1 : plan.getUseCount() + 1);

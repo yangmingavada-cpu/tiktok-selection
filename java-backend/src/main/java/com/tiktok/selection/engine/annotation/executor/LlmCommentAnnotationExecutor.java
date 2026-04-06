@@ -6,6 +6,7 @@ import com.tiktok.selection.engine.BlockExecutor;
 import com.tiktok.selection.engine.BlockResult;
 import com.tiktok.selection.engine.annotation.McpBlock;
 import com.tiktok.selection.engine.annotation.request.LlmCommentAnnotationRequest;
+import com.tiktok.selection.service.LlmConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,17 +21,19 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(LlmCommentAnnotationExecutor.class);
     private static final McpBlock BLOCK_META = LlmCommentAnnotationRequest.class.getAnnotation(McpBlock.class);
-    private static final int BATCH_SIZE = 20;
+    private static final int BATCH_SIZE = 10;
     private static final String LLM_CONFIG_KEY = "llm_config";
     private static final String AI_COMMENT_FIELD = "ai_comment";
 
     private final WebClient webClient;
+    private final LlmConfigService llmConfigService;
 
     @Value("${python.ai.base-url:http://localhost:8000}")
     private String pythonAiBaseUrl;
 
-    public LlmCommentAnnotationExecutor(WebClient.Builder webClientBuilder) {
+    public LlmCommentAnnotationExecutor(WebClient.Builder webClientBuilder, LlmConfigService llmConfigService) {
         this.webClient = webClientBuilder.build();
+        this.llmConfigService = llmConfigService;
     }
 
     @Override
@@ -48,8 +51,10 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
         String language = BlockSecurityUtil.validateLanguage(req.language);
         int rawMaxChars = req.maxChars != null ? req.maxChars : 100;
         int maxChars = BlockSecurityUtil.validateMaxChars(rawMaxChars);
-        Map<String, Object> llmConfig = context.getBlockConfig().get(LLM_CONFIG_KEY) instanceof Map<?, ?>
-            ? (Map<String, Object>) context.getBlockConfig().get(LLM_CONFIG_KEY) : Map.of();
+        Map<String, Object> llmConfig = resolveLlmConfig(context);
+        log.info("[DEBUG-LLM] Executor received llmConfig: model={}, base_url={}, api_key_len={}",
+            llmConfig.get("model"), llmConfig.get("base_url"),
+            llmConfig.get("api_key") != null ? String.valueOf(llmConfig.get("api_key")).length() : 0);
 
         BlockSecurityUtil.validateInputSize(inputData.size());
 
@@ -91,7 +96,7 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
                 .bodyValue(reqBody)
                 .retrieve()
                 .bodyToMono(Map.class)
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(180))
                 .block();
 
             applyCommentResults(resp, output, batchStart);
@@ -126,5 +131,19 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
         if (resp == null || !(resp.get("usage") instanceof Map<?, ?> usage)) return 0;
         Object tokObj = ((Map<Object, Object>) usage).get("total_tokens");
         return tokObj instanceof Number n ? n.intValue() : 0;
+    }
+
+    /**
+     * 解析LLM配置：优先使用blockConfig中的llm_config，若为空或null则回退到全局激活配置
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolveLlmConfig(BlockContext context) {
+        Object raw = context.getBlockConfig().get(LLM_CONFIG_KEY);
+        if (raw instanceof Map<?, ?> configMap && !configMap.isEmpty()) {
+            return (Map<String, Object>) configMap;
+        }
+        // 回退到全局激活的LLM配置
+        log.info("Block llm_config is empty, falling back to global active LLM config");
+        return llmConfigService.toLlmConfigMap(llmConfigService.getActiveLlmConfig());
     }
 }

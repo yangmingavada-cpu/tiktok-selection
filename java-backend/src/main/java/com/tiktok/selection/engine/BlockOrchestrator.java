@@ -310,9 +310,14 @@ public class BlockOrchestrator {
             try {
                 LlmConfig llmCfg = llmConfigService.getActiveLlmConfig();
                 Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(llmCfg);
+                log.info("[DEBUG-LLM] BEFORE put: config.llm_config={}", config.get("llm_config"));
+                log.info("[DEBUG-LLM] injecting: model={}, base_url={}, api_key_len={}",
+                    llmConfigMap.get("model"), llmConfigMap.get("base_url"),
+                    llmConfigMap.get("api_key") != null ? ((String)llmConfigMap.get("api_key")).length() : 0);
                 config.put("llm_config", llmConfigMap);
+                log.info("[DEBUG-LLM] AFTER put: config.llm_config={}", config.get("llm_config") != null ? "SET(keys=" + ((Map<?,?>)config.get("llm_config")).keySet() + ")" : "NULL");
             } catch (Exception e) {
-                log.warn("Failed to inject llm_config for block {}: {}", blockId, e.getMessage());
+                log.warn("Failed to inject llm_config for block {}: {}", blockId, e.getMessage(), e);
             }
         }
 

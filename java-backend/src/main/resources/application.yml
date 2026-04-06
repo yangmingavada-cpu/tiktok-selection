@@ -104,4 +104,4 @@ ai:
   budget:
     intent-parse-token-quota: ${INTENT_PARSE_TOKEN_QUOTA:200000}
     intent-interpret-token-quota: ${INTENT_INTERPRET_TOKEN_QUOTA:6000}
-    session-execute-token-quota: ${SESSION_EXECUTE_LLM_TOKEN_QUOTA:120000}
+    session-execute-token-quota: ${SESSION_EXECUTE_LLM_TOKEN_QUOTA:500000}

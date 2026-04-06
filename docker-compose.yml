@@ -64,7 +64,8 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     ports:
       - "8080:8080"
-    command: mvn spring-boot:run -Dspring-boot.run.jvmArguments="-Xms512m -Xmx512m -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs"
+      - "5005:5005"
+    command: mvn spring-boot:run -Dspring-boot.run.jvmArguments="-Xms512m -Xmx512m -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
     depends_on:
       postgres:
         condition: service_healthy
