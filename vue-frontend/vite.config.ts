@@ -9,17 +9,6 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
-  optimizeDeps: {
-    include: [
-      'dayjs/plugin/localizedFormat',
-      'dayjs/plugin/customParseFormat',
-      'dayjs/plugin/isoWeek',
-      'dayjs/plugin/advancedFormat',
-      'dayjs/plugin/weekOfYear',
-      'dayjs/plugin/weekYear',
-    ],
-    exclude: ['@univerjs/engine-render', '@univerjs/engine-formula'],
-  },
   server: {
     port: 3000,
     host: '0.0.0.0',
