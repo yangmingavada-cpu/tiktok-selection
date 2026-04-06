@@ -27,6 +27,7 @@ vue-frontend/*.tsbuildinfo
 # Claude / Agents
 .agents/
 .claude/
+CLAUDE.md
 
 # OS
 .DS_Store
