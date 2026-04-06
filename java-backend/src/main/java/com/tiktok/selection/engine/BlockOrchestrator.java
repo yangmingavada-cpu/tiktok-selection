@@ -15,6 +15,8 @@ import com.tiktok.selection.mapper.SessionDataMapper;
 import com.tiktok.selection.mapper.SessionMapper;
 import com.tiktok.selection.mapper.SessionStepMapper;
 import com.tiktok.selection.mapper.SessionStepSnapshotMapper;
+import com.tiktok.selection.entity.EchotikCategory;
+import com.tiktok.selection.service.CategoryService;
 import com.tiktok.selection.service.EchotikApiKeyService;
 import com.tiktok.selection.service.IntentService;
 import com.tiktok.selection.service.LlmConfigService;
@@ -70,6 +72,7 @@ public class BlockOrchestrator {
     private final EchotikApiKeyService echotikApiKeyService;
     private final IntentService intentService;
     private final LlmConfigService llmConfigService;
+    private final CategoryService categoryService;
 
     /** 执行阶段累计 LLM token 预算，覆盖语义评分和 AI 评语等执行型能力 */
     @Value("${ai.budget.session-execute-token-quota:120000}")
@@ -84,7 +87,8 @@ public class BlockOrchestrator {
                              QuotaService quotaService,
                              EchotikApiKeyService echotikApiKeyService,
                              @Lazy IntentService intentService,
-                             LlmConfigService llmConfigService) {
+                             LlmConfigService llmConfigService,
+                             CategoryService categoryService) {
         this.blockExecutorRegistry = blockExecutorRegistry;
         this.sseEmitterManager     = sseEmitterManager;
         this.sessionMapper         = sessionMapper;
@@ -95,7 +99,97 @@ public class BlockOrchestrator {
         this.echotikApiKeyService  = echotikApiKeyService;
         this.intentService         = intentService;
         this.llmConfigService      = llmConfigService;
+        this.categoryService       = categoryService;
     }
+
+    // ─── 字段中文映射 ──────────────────────────────────────────────────────────
+    private static final Map<String, String> FIELD_LABELS;
+    static {
+        Map<String, String> m = new HashMap<>(160);
+        // 商品基础
+        m.put("product_id", "商品ID"); m.put("product_name", "商品名称"); m.put("region", "地区");
+        m.put("category_id", "一级类目"); m.put("category_l2_id", "二级类目"); m.put("category_l3_id", "三级类目");
+        m.put("min_price", "最低价"); m.put("max_price", "最高价"); m.put("spu_avg_price", "平均售价");
+        m.put("discount", "折扣"); m.put("free_shipping", "包邮"); m.put("is_s_shop", "S级店铺");
+        m.put("off_mark", "下架标记"); m.put("product_rating", "商品评分"); m.put("review_count", "评论数");
+        m.put("product_commission_rate", "佣金率"); m.put("sales_flag", "销售标记");
+        m.put("sales_trend_flag", "销售趋势标记"); m.put("cover_url", "封面图");
+        m.put("first_crawl_dt", "首次抓取日期"); m.put("brand_name", "品牌名");
+        // 销售数据
+        m.put("total_sale_cnt", "总销量"); m.put("total_sale_gmv_amt", "总销售额");
+        m.put("total_sale_1d_cnt", "1日销量"); m.put("total_sale_7d_cnt", "7日销量");
+        m.put("total_sale_15d_cnt", "15日销量"); m.put("total_sale_30d_cnt", "30日销量");
+        m.put("total_sale_60d_cnt", "60日销量"); m.put("total_sale_90d_cnt", "90日销量");
+        m.put("total_sale_gmv_1d_amt", "1日销售额"); m.put("total_sale_gmv_7d_amt", "7日销售额");
+        m.put("total_sale_gmv_15d_amt", "15日销售额"); m.put("total_sale_gmv_30d_amt", "30日销售额");
+        m.put("total_sale_gmv_60d_amt", "60日销售额"); m.put("total_sale_gmv_90d_amt", "90日销售额");
+        // 视频数据
+        m.put("total_video_cnt", "总视频数"); m.put("total_video_7d_cnt", "7日视频数");
+        m.put("total_video_30d_cnt", "30日视频数"); m.put("total_video_sale_cnt", "视频带货量");
+        m.put("total_video_sale_7d_cnt", "7日视频带货量"); m.put("total_video_sale_30d_cnt", "30日视频带货量");
+        m.put("total_video_sale_gmv_amt", "视频带货额"); m.put("total_video_sale_gmv_7d_amt", "7日视频带货额");
+        m.put("total_video_sale_gmv_30d_amt", "30日视频带货额");
+        // 直播数据
+        m.put("total_live_cnt", "总直播数"); m.put("total_live_7d_cnt", "7日直播数");
+        m.put("total_live_30d_cnt", "30日直播数"); m.put("total_live_sale_cnt", "直播带货量");
+        m.put("total_live_sale_7d_cnt", "7日直播带货量"); m.put("total_live_sale_30d_cnt", "30日直播带货量");
+        m.put("total_live_sale_gmv_amt", "直播带货额"); m.put("total_live_sale_gmv_7d_amt", "7日直播带货额");
+        m.put("total_live_sale_gmv_30d_amt", "30日直播带货额");
+        // 浏览/互动
+        m.put("total_views_cnt", "总浏览量"); m.put("total_views_7d_cnt", "7日浏览量");
+        m.put("total_views_30d_cnt", "30日浏览量"); m.put("total_views_1d_cnt", "1日浏览量");
+        m.put("total_ifl_cnt", "总种草数"); m.put("total_digg_cnt", "总点赞数");
+        m.put("total_digg_7d_cnt", "7日点赞数"); m.put("total_digg_30d_cnt", "30日点赞数");
+        m.put("total_shares_cnt", "总分享数"); m.put("total_comments_cnt", "总评论数");
+        m.put("total_favorites_cnt", "总收藏数");
+        // 达人
+        m.put("user_id", "用户ID"); m.put("unique_id", "账号"); m.put("nick_name", "昵称");
+        m.put("category", "类目"); m.put("language", "语言"); m.put("gender", "性别");
+        m.put("ec_score", "电商评分"); m.put("interaction_rate", "互动率"); m.put("show_case_flag", "橱窗标记");
+        m.put("total_followers_cnt", "总粉丝数"); m.put("total_followers_1d_cnt", "1日涨粉");
+        m.put("total_followers_7d_cnt", "7日涨粉"); m.put("total_followers_30d_cnt", "30日涨粉");
+        m.put("total_followers_90d_cnt", "90日涨粉"); m.put("total_following_cnt", "关注数");
+        m.put("total_post_video_cnt", "发布视频数"); m.put("total_product_cnt", "带货商品数");
+        m.put("total_product_30d_cnt", "30日带货商品数"); m.put("avg_30d_price", "30日均价");
+        m.put("per_video_product_views_avg_7d_cnt", "7日单视频均播"); m.put("bio", "简介");
+        // 视频详情
+        m.put("video_id", "视频ID"); m.put("video_desc", "视频描述");
+        m.put("create_time", "创建时间"); m.put("duration", "时长");
+        m.put("is_ad", "广告"); m.put("created_by_ai", "AI生成");
+        // 店铺
+        m.put("seller_id", "店铺ID"); m.put("seller_name", "店铺名称"); m.put("rating", "店铺评分");
+        m.put("from_flag", "来源标记"); m.put("total_crawl_product_cnt", "抓取商品数");
+        // 话题/关键词
+        m.put("hashtag_id", "话题ID"); m.put("hashtag_name", "话题名称");
+        m.put("video_count", "相关视频数"); m.put("total_views", "总播放量");
+        m.put("avg_views_per_video", "平均播放量"); m.put("keyword", "关键词");
+        m.put("search_volume", "搜索量"); m.put("search_trend", "搜索趋势");
+        m.put("competition_level", "竞争程度");
+        // 评论/情感
+        m.put("review_id", "评论ID"); m.put("display_text", "评论内容");
+        m.put("review_timestamp", "评论时间"); m.put("sku_id", "SKU ID");
+        m.put("sku_specification", "SKU规格"); m.put("sentiment_positive", "正面情感");
+        m.put("sentiment_negative", "负面情感"); m.put("sentiment_neutral", "中性情感");
+        m.put("sentiment_summary", "情感摘要");
+        // 趋势/富化
+        m.put("desc_detail", "详情描述"); m.put("specification", "规格"); m.put("skus", "SKU列表");
+        m.put("trend_data", "趋势数据"); m.put("trend_peak_date", "峰值日期");
+        m.put("trend_direction", "趋势方向"); m.put("fans_growth_trend", "粉丝增长趋势");
+        m.put("trend_views", "浏览趋势"); m.put("trend_likes", "点赞趋势");
+        m.put("trend_comments", "评论趋势");
+        // 计算/标注
+        m.put("total_score", "总评分"); m.put("growth_rate_7d_30d", "7/30日增长率");
+        m.put("profit_margin_est", "预估利润率"); m.put("contact_info", "联系方式");
+        m.put("audience_demographics", "受众画像"); m.put("top_categories", "主要类目");
+        m.put("llm_comment", "AI评语");
+        FIELD_LABELS = Map.copyOf(m);
+    }
+
+    private static final Map<String, String> REGION_ZH = Map.of(
+            "TH", "泰国", "US", "美国", "UK", "英国",
+            "ID", "印度尼西亚", "MY", "马来西亚", "PH", "菲律宾",
+            "VN", "越南", "SG", "新加坡", "SA", "沙特阿拉伯", "AE", "阿联酋"
+    );
 
     // ─── 公开异步入口 ────────────────────────────────────────────────────────────
 
@@ -221,13 +315,15 @@ public class BlockOrchestrator {
 
                 // 每步更新 currentView（持久化中间结果，前端刷新可看到）
                 List<Map<String, Object>> stepDims = buildDims(state.availableFields);
-                updateCurrentView(sessionId, state.inputData, stepDims, state.currentOutputType);
-                sendStepComplete(sessionId, seq, totalSteps, blockId, result, stepDims);
+                List<Map<String, Object>> displayData = translateForDisplay(state.inputData);
+                updateCurrentView(sessionId, displayData, stepDims, state.currentOutputType);
+                sendStepComplete(sessionId, seq, totalSteps, blockId, result, stepDims, displayData);
             }
 
             // 正常完成
             List<Map<String, Object>> finalDims = buildDims(state.availableFields);
-            completeSession(session, state.totalApiCalls, state.totalTokens, state.inputData, finalDims);
+            List<Map<String, Object>> finalDisplayData = translateForDisplay(state.inputData);
+            completeSession(session, state.totalApiCalls, state.totalTokens, finalDisplayData, finalDims);
             sseEmitterManager.sendEvent(sessionId,
                     SseProgressEvent.sessionComplete(sessionId, totalSteps));
             sseEmitterManager.complete(sessionId);
@@ -452,12 +548,13 @@ public class BlockOrchestrator {
 
     private void sendStepComplete(String sessionId, int seq, int total,
                                    String blockId, BlockResult result,
-                                   List<Map<String, Object>> dims) {
+                                   List<Map<String, Object>> dims,
+                                   List<Map<String, Object>> displayData) {
         String msg = String.format("完成: %s，输出 %d 条",
                 blockId, result.getOutputCount() != null ? result.getOutputCount() : 0);
         sseEmitterManager.sendEvent(sessionId,
                 SseProgressEvent.stepComplete(sessionId, seq, total, blockId, msg,
-                        result.getOutputData(), dims));
+                        displayData, dims));
     }
 
     /** 检查 session 是否已被取消（直接读 DB） */
@@ -474,10 +571,56 @@ public class BlockOrchestrator {
         return fields.stream().map(f -> {
             Map<String, Object> dim = LinkedHashMap.newLinkedHashMap(4);
             dim.put("id",    f);
-            dim.put("label", f);
+            dim.put("label", FIELD_LABELS.getOrDefault(f, f));
             dim.put("type",  inferFieldType(f));
             return dim;
         }).toList();
+    }
+
+    /**
+     * 创建数据行的浅拷贝，并将 region 代码和 category ID 转换为中文显示名。
+     * 返回新列表，不修改原始数据（避免影响后续 Block 逻辑）。
+     */
+    private List<Map<String, Object>> translateForDisplay(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) return rows;
+
+        // 从首行获取 region，用于查询该地区的类目映射
+        Object firstRegion = rows.get(0).get("region");
+        String regionCode = firstRegion instanceof String ? (String) firstRegion : null;
+
+        Map<String, String> categoryNames = new HashMap<>();
+        if (regionCode != null) {
+            try {
+                List<EchotikCategory> categories = categoryService.listByRegion(regionCode);
+                for (EchotikCategory c : categories) {
+                    categoryNames.put(c.getCategoryId(),
+                            c.getNameZh() != null ? c.getNameZh() : c.getNameEn());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to load category names for region {}: {}", regionCode, e.getMessage());
+            }
+        }
+
+        List<String> catKeys = List.of("category_id", "category_l2_id", "category_l3_id");
+        List<Map<String, Object>> result = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> copy = new HashMap<>(row);
+            // region 转中文
+            Object rv = copy.get("region");
+            if (rv instanceof String code) {
+                copy.put("region", REGION_ZH.getOrDefault(code, code));
+            }
+            // category ID 转名称
+            for (String key : catKeys) {
+                Object cv = copy.get(key);
+                if (cv != null) {
+                    String catId = String.valueOf(cv);
+                    copy.put(key, categoryNames.getOrDefault(catId, catId));
+                }
+            }
+            result.add(copy);
+        }
+        return result;
     }
 
     private String inferFieldType(String fieldName) {
