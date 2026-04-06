@@ -74,7 +74,18 @@ onMounted(() => {
   univerInst = univer
   univerAPI = api
 
-  univerAPI.createWorkbook({ name: '选品数据' })
+  univerAPI.createWorkbook({
+    name: '选品数据',
+    sheetOrder: ['sheet1'],
+    sheets: {
+      sheet1: {
+        id: 'sheet1',
+        name: 'Sheet1',
+        rowCount: 10000,
+        columnCount: 100,
+      },
+    },
+  })
 
   // 首次挂载时已有数据，延迟 100ms 等 Univer 完全初始化后写入
   if (props.tableCols.length > 0 && props.tableData.length > 0) {
