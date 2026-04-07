@@ -153,6 +153,12 @@ CREATE TRIGGER trg_session_update_time BEFORE UPDATE ON db_session.session FOR E
 COMMENT ON COLUMN db_session.session.conversation_snapshot IS '多智能体会话快照，包含完整对话记录、QA历史、规划摘要';
 COMMENT ON COLUMN db_session.session.remark IS '用户备注信息';
 
+-- 兼容迁移：审计结果 + 竞品分析
+ALTER TABLE db_session.session ADD COLUMN IF NOT EXISTS audit_result        JSONB DEFAULT NULL;
+ALTER TABLE db_session.session ADD COLUMN IF NOT EXISTS competitor_analysis  TEXT DEFAULT NULL;
+COMMENT ON COLUMN db_session.session.audit_result IS '执行前审计结果: {pass, score, issues, suggestions}';
+COMMENT ON COLUMN db_session.session.competitor_analysis IS '竞品洞察分析报告（Markdown）';
+
 CREATE TABLE IF NOT EXISTS db_session.session_data (
     session_id          VARCHAR(36) NOT NULL,
     current_view        JSONB DEFAULT NULL,

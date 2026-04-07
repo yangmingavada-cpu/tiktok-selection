@@ -76,6 +76,13 @@ export interface Session {
   updateTime: string
   currentView: CurrentView | null
   conversationSnapshot?: ConversationSnapshot
+  auditResult?: {
+    pass: boolean
+    score: number
+    issues: string[]
+    suggestions: string[]
+  }
+  competitorAnalysis?: string
   remark?: string
 }
 

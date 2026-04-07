@@ -5,7 +5,9 @@ import com.tiktok.selection.common.BusinessException;
 import com.tiktok.selection.common.ErrorCode;
 import com.tiktok.selection.entity.IntentParseLog;
 import com.tiktok.selection.entity.LlmConfig;
+import com.tiktok.selection.entity.Session;
 import com.tiktok.selection.mapper.IntentParseLogMapper;
+import com.tiktok.selection.mapper.SessionMapper;
 import com.tiktok.selection.mcp.ChainBuildSession;
 import com.tiktok.selection.mcp.ChainBuildSessionManager;
 import com.tiktok.selection.mcp.IntentProgressBus;
@@ -45,6 +47,8 @@ public class IntentService {
     private final IntentProgressBus progressBus;
     private final IntentParseLogMapper parseLogMapper;
     private final MemoryFileService memoryFileService;
+    private final SessionMapper sessionMapper;
+    private final ObjectMapper objectMapper;
     private final WebClient webClient;
 
     @Value("${python.ai.base-url:http://localhost:8000}")
@@ -67,12 +71,15 @@ public class IntentService {
                          IntentProgressBus progressBus,
                          IntentParseLogMapper parseLogMapper,
                          MemoryFileService memoryFileService,
+                         SessionMapper sessionMapper,
                          WebClient.Builder webClientBuilder) {
         this.llmConfigService  = llmConfigService;
         this.sessionManager    = sessionManager;
         this.progressBus       = progressBus;
         this.parseLogMapper    = parseLogMapper;
         this.memoryFileService = memoryFileService;
+        this.sessionMapper     = sessionMapper;
+        this.objectMapper      = new ObjectMapper();
         // 配置 Netty 底层超时：responseTimeout 覆盖默认值，与 Reactor .timeout() 保持一致
         HttpClient httpClient = HttpClient.create()
                 .responseTimeout(TIMEOUT);
@@ -422,7 +429,7 @@ public class IntentService {
                         err -> log.warn("Distillation trigger failed sessionId={}: {}", sessionId, err.getMessage())
                 );
 
-        // 2. 竞品洞察（fire-and-forget, consume SSE stream to completion）
+        // 2. 竞品洞察（收集 SSE 结果并持久化到 session）
         if (selectedProducts != null && !selectedProducts.isEmpty()) {
             Map<String, Object> competitorBody = new LinkedHashMap<>();
             competitorBody.put("selected_products", selectedProducts);
@@ -435,12 +442,68 @@ public class IntentService {
                     .accept(MediaType.TEXT_EVENT_STREAM)
                     .retrieve()
                     .bodyToFlux(String.class)
+                    .collectList()
                     .subscribe(
-                            null,
+                            tokens -> saveCompetitorAnalysis(sessionId, tokens),
                             err -> log.warn("Competitor stream failed sessionId={}: {}", sessionId, err.getMessage())
                     );
         }
 
         log.info("POST_EXEC_PIPELINE sessionId={} userId={} threadId={}", sessionId, userId, effectiveThreadId);
+    }
+
+    /**
+     * 解析 SSE token 流并将竞品分析 Markdown 保存到 session。
+     */
+    @SuppressWarnings("unchecked")
+    private void saveCompetitorAnalysis(String sessionId, List<String> tokens) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (String raw : tokens) {
+                String data = raw.startsWith("data: ") ? raw.substring(6).trim() : raw.trim();
+                if (data.isEmpty()) continue;
+                Map<String, Object> evt = objectMapper.readValue(data, Map.class);
+                Object token = evt.get("token");
+                if (token != null) {
+                    sb.append(token);
+                }
+            }
+            if (!sb.isEmpty()) {
+                Session session = new Session();
+                session.setId(sessionId);
+                session.setCompetitorAnalysis(sb.toString());
+                sessionMapper.updateById(session);
+                log.info("Competitor analysis saved sessionId={} length={}", sessionId, sb.length());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to save competitor analysis sessionId={}: {}", sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * 同步调用 Python Audit Agent 对积木链进行执行前质量审计。
+     * 返回审计结果 {pass, score, issues, suggestions}，失败时返回默认通过。
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> auditBlockChain(List<Map<String, Object>> blockChain) {
+        LlmConfig auditLlmConfig = llmConfigService.getActiveLlmConfig();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("block_chain", blockChain);
+        body.put("llm_config", llmConfigService.toLlmConfigMap(auditLlmConfig));
+
+        try {
+            Map<String, Object> result = webClient.post()
+                    .uri(pythonAiBaseUrl + "/intent/audit")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .timeout(Duration.ofSeconds(30))
+                    .block();
+            return result != null ? result : Map.of("pass", true, "score", 0, "issues", List.of(), "suggestions", List.of());
+        } catch (Exception e) {
+            log.warn("Audit call failed, defaulting to pass: {}", e.getMessage());
+            return Map.of("pass", true, "score", 0, "issues", List.of(), "suggestions", List.of());
+        }
     }
 }

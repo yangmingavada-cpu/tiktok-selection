@@ -225,6 +225,22 @@ public class BlockOrchestrator {
             return;
         }
 
+        // 执行前审计：调用 Python Audit Agent 检查积木链质量
+        Map<String, Object> auditResult = intentService.auditBlockChain(blockChain);
+        freshSession.setAuditResult(auditResult);
+        sessionMapper.updateById(freshSession);
+        if (!Boolean.TRUE.equals(auditResult.get("pass"))) {
+            log.warn("Audit failed for sessionId={}: score={}, issues={}",
+                    sessionId, auditResult.get("score"), auditResult.get("issues"));
+            String auditMsg = "选品方案质量审核未通过（评分: " + auditResult.get("score") + "/100），建议调整后重试";
+            failSession(freshSession, 0, 0L);
+            sseEmitterManager.sendEvent(sessionId,
+                    SseProgressEvent.fail(sessionId, 0, null, auditMsg));
+            sseEmitterManager.complete(sessionId);
+            return;
+        }
+        log.info("Audit passed for sessionId={}: score={}", sessionId, auditResult.get("score"));
+
         runLoop(freshSession, blockChain, 0,
                 new LoopState(new ArrayList<>(), new ArrayList<>(), null, 0, 0L));
     }

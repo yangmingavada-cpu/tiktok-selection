@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 会话实体
@@ -46,6 +47,17 @@ public class Session {
      */
     @TableField(typeHandler = JacksonTypeHandler.class)
     private JsonNode conversationSnapshot;
+
+    /**
+     * 执行前审计结果（JSONB）：{pass, score, issues, suggestions}
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private Map<String, Object> auditResult;
+
+    /**
+     * 竞品洞察分析报告（Markdown 文本）
+     */
+    private String competitorAnalysis;
 
     /**
      * 用户备注信息

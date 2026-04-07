@@ -155,6 +155,48 @@ function formatBlockType(type: string): string {
             </el-collapse>
           </div>
 
+          <!-- 审计报告 -->
+          <div v-if="session.auditResult" class="intro-section">
+            <el-collapse>
+              <el-collapse-item name="audit">
+                <template #title>
+                  审计报告
+                  <el-tag
+                    :type="session.auditResult.pass ? 'success' : 'danger'"
+                    size="small"
+                    style="margin-left: 8px"
+                  >
+                    {{ session.auditResult.pass ? '通过' : '未通过' }} · {{ session.auditResult.score }}分
+                  </el-tag>
+                </template>
+                <div v-if="session.auditResult.issues?.length">
+                  <h5>问题</h5>
+                  <ul>
+                    <li v-for="(issue, i) in session.auditResult.issues" :key="i">{{ issue }}</li>
+                  </ul>
+                </div>
+                <div v-if="session.auditResult.suggestions?.length">
+                  <h5>建议</h5>
+                  <ul>
+                    <li v-for="(s, i) in session.auditResult.suggestions" :key="i">{{ s }}</li>
+                  </ul>
+                </div>
+                <div v-if="!session.auditResult.issues?.length && !session.auditResult.suggestions?.length">
+                  <span style="color: var(--el-text-color-secondary)">审计通过，无问题发现</span>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
+          <!-- 竞品分析 -->
+          <div v-if="session.competitorAnalysis" class="intro-section">
+            <el-collapse>
+              <el-collapse-item title="竞品分析" name="competitor">
+                <div class="plan-interpretation" v-html="renderMd(session.competitorAnalysis)" />
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+
           <!-- 执行步骤 -->
           <div class="intro-section">
             <h4>执行步骤（{{ mergedSteps.length }} 个）</h4>
