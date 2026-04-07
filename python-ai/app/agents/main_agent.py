@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -95,6 +96,7 @@ MICROCOMPACT_TEXT_LIMIT = 1600
 AI_MESSAGE_COMPACT_LIMIT = 1200
 COMPACT_TRIGGER_MESSAGE_CHARS = 18_000
 COMPACT_KEEP_RECENT_MESSAGES = 8
+MAX_COMPACT_FAILURES = 3
 
 # 合成工具：让 LLM 可以按需调用 resources/read 查询知识（品类树、字段字典等）
 _RESOURCE_TOOL: dict = {
@@ -210,6 +212,8 @@ class AgentState(TypedDict):
     chain_snapshot: dict | None       # 积木链恢复上下文（随 checkpoint 持久化，用于 Java ChainBuildSession 重建）
     compact_summary: str | None       # 当前线程的压缩摘要
     compact_generation: int           # 已触发压缩的代数
+    compact_failures: int             # 连续压缩失败计数（熔断器：≥3 时停止尝试）
+    memory_updated_at_map: dict       # {filePath: updatedAt}，read_memory 时注入新鲜度警告
 
 
 class AgentService:
@@ -271,6 +275,9 @@ class AgentService:
             llm.bind_tools(openai_tools, tool_choice="auto") if openai_tools else llm
         )
 
+        # 微压缩：截断旧 ToolMessage 以减少 token 消耗（不影响 checkpoint）
+        llm_messages = AgentService._micro_compact_old_tool_messages(state["messages"])
+
         # 流式收集，每 100 字符 fire-and-forget 推送一次 thinking 事件
         response = None
         thinking_buf = ""
@@ -278,7 +285,7 @@ class AgentService:
 
         async def _collect_stream() -> None:
             nonlocal response, thinking_buf, last_pushed_len
-            async for chunk in bound_llm.astream(state["messages"]):
+            async for chunk in bound_llm.astream(llm_messages):
                 response = chunk if response is None else response + chunk
                 if chunk.content and session_id:
                     thinking_buf += chunk.content
@@ -456,12 +463,35 @@ class AgentService:
         return sum(len(AgentService._message_text_for_estimate(msg)) for msg in messages)
 
     @staticmethod
+    def _micro_compact_old_tool_messages(messages: list[BaseMessage], keep_recent: int = 6) -> list[BaseMessage]:
+        """零 LLM 成本的微压缩：截断旧 ToolMessage 内容，只保留关键字段。
+        使用浅拷贝，不修改 checkpoint 中的原始消息。"""
+        human_indices = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
+        if len(human_indices) <= 1:
+            return messages
+        cutoff = human_indices[-keep_recent] if len(human_indices) > keep_recent else human_indices[0]
+        result = list(messages)
+        for i in range(cutoff):
+            msg = result[i]
+            if isinstance(msg, ToolMessage) and len(str(msg.content or "")) > 300:
+                compacted = copy.copy(msg)
+                try:
+                    obs = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                    summary = {k: obs[k] for k in ("success", "message", "error", "chain_length") if k in obs}
+                    compacted.content = json.dumps(summary, ensure_ascii=False)
+                except Exception:
+                    compacted.content = str(msg.content)[:200]
+                result[i] = compacted
+        return result
+
+    @staticmethod
     async def _execute_tool_call(
         tc: dict,
         session_id: str,
         mcp_client: MCPClient,
         memory_client: MemoryClient | None = None,
         user_id: str | None = None,
+        state: dict | None = None,
     ) -> dict:
         """执行单个工具调用，返回 observation dict。"""
         func_name: str = tc["name"]
@@ -483,10 +513,15 @@ class AgentService:
                     return {"success": False, "error": "记忆系统未初始化（user_id 未传入）"}
                 file_paths = func_args.get("file_paths", [])
                 files = await memory_client.read_files(file_paths)
-                content = "\n\n---\n\n".join(
-                    f"## {path}\n{AgentService._microcompact_text(c, MEMORY_FILE_EXCERPT_CHARS)}"
-                    for path, c in files.items()
-                )
+                updated_at_map = (state or {}).get("memory_updated_at_map") or {}
+                parts = []
+                for path, c in files.items():
+                    header = f"## {path}"
+                    freshness = AgentService._freshness_hint_for_content(updated_at_map.get(path))
+                    if freshness:
+                        header += f"\n<system-reminder>{freshness}</system-reminder>"
+                    parts.append(f"{header}\n{AgentService._microcompact_text(c, MEMORY_FILE_EXCERPT_CHARS)}")
+                content = "\n\n---\n\n".join(parts)
                 return {
                     "success": True,
                     "content": content or "（无内容）",
@@ -626,7 +661,7 @@ class AgentService:
 
         for tc in last.tool_calls:
             obs = await AgentService._execute_tool_call(
-                tc, session_id, mcp_client, memory_client, user_id
+                tc, session_id, mcp_client, memory_client, user_id, state=state,
             )
             # 收集主动写入的记忆名称（蒸馏互斥用）
             written_name = obs.pop("_written_memory_name", None)
@@ -823,7 +858,21 @@ class AgentService:
             "token_quota": token_quota,
             "compact_summary": None,
             "compact_generation": 0,
+            "compact_failures": 0,
+            "memory_updated_at_map": {},
         }
+
+    @staticmethod
+    _MEMORY_FILTER_SYSTEM_PROMPT = """你是记忆相关性筛选器。根据用户当前问题，从记忆索引中选出最相关的条目。
+
+筛选原则：
+- 用户正在使用的工具（active_tools）：不需要召回这些工具的基本用法文档，但务必召回与这些工具相关的警告、陷阱、已知问题
+- 用户画像和行为反馈类记忆（user/feedback）：如果描述与当前问题的市场/品类/策略相关，优先召回
+- 会话决策类记忆（project）：仅当用户明确想复用或参考历史方案时才召回
+- 外部资源类记忆（reference）：仅当用户提及了相关的数据源或参考时才召回
+- 描述过于泛化的记忆（如"选品相关""用户偏好"）相关性应降低
+
+直接返回选中序号的 JSON 数组，如 [0,2,4]。无相关时返回 []。"""
 
     @staticmethod
     async def _filter_relevant_memories(
@@ -832,6 +881,7 @@ class AgentService:
         llm: ChatOpenAI,
         max_count: int = MEMORY_INDEX_SELECT_LIMIT,
         surfaced_paths: list[str] | None = None,
+        active_tool_names: list[str] | None = None,
     ) -> list[dict]:
         """
         轻量 side call：从记忆索引中筛选与当前用户输入最相关的条目（最多 max_count 条）。
@@ -848,17 +898,23 @@ class AgentService:
             return candidates
 
         index_lines = [
-            f"{i}: 【{e.get('name', '')}】{e.get('description', '')}"
+            f"{i}: [{e.get('memoryType', '')}] 【{e.get('name', '')}】{e.get('description', '')}"
             for i, e in enumerate(candidates)
         ]
-        prompt = (
-            f"用户问题：{user_text}\n\n"
-            f"记忆索引（序号 名称 描述）：\n" + "\n".join(index_lines) +
-            f"\n\n从上述记忆中选出最多 {max_count} 条与用户问题最相关的序号，"
-            f"直接返回 JSON 数组如 [0,2,4]，无相关时返回 []。"
+        active_tools_hint = ""
+        if active_tool_names:
+            active_tools_hint = f"\n当前用户可用工具：{', '.join(active_tool_names[:10])}\n"
+        user_prompt = (
+            f"用户问题：{user_text}\n"
+            f"{active_tools_hint}\n"
+            f"记忆索引（序号 [类型] 名称 描述）：\n" + "\n".join(index_lines) +
+            f"\n\n从上述记忆中选出最多 {max_count} 条最相关的序号。"
         )
         try:
-            resp = await llm.ainvoke([{"role": "user", "content": prompt}])
+            resp = await llm.ainvoke([
+                {"role": "system", "content": AgentService._MEMORY_FILTER_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ])
             match = re.search(r'\[[\d,\s]*\]', resp.content.strip())
             if match:
                 indices = json.loads(match.group())
@@ -873,19 +929,85 @@ class AgentService:
 
     @staticmethod
     def _freshness_hint(updated_at_str: str | None) -> str:
-        """将 updatedAt 字符串转换为新鲜度提示文本。7天内不提示，30天以上建议核实。"""
+        """将 updatedAt 字符串转换为新鲜度提示文本。>1天即提示，>30天建议核实。"""
         if not updated_at_str:
             return ""
         try:
             updated_dt = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
             days_old = (datetime.now(timezone.utc) - updated_dt).days
             if days_old >= 30:
-                return f" *（{days_old}天前，可能已过时，建议核实）*"
+                return f" ⚠（{days_old}天前，可能严重过时，使用前务必核实）"
             if days_old >= 7:
+                return f" *（{days_old}天前，建议核实后再使用）*"
+            if days_old >= 1:
                 return f" *（{days_old}天前）*"
         except Exception:
             pass
         return ""
+
+    @staticmethod
+    def _freshness_hint_for_content(updated_at_str: str | None) -> str:
+        """用于 read_memory 返回内容时注入的更强新鲜度警告文本。"""
+        if not updated_at_str:
+            return ""
+        try:
+            updated_dt = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+            days_old = (datetime.now(timezone.utc) - updated_dt).days
+            if days_old >= 30:
+                return (f"此记忆已 {days_old} 天未更新，可能严重过时。"
+                        "不要将其内容作为当前事实断言——请先与用户核实。")
+            if days_old >= 7:
+                return f"此记忆已 {days_old} 天未更新，使用前请核实其是否仍然适用。"
+            if days_old >= 1:
+                return f"此记忆最后更新于 {days_old} 天前。"
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _extract_post_compact_context(messages: list[BaseMessage]) -> str | None:
+        """从压缩前的消息历史中提取关键资源上下文（read_resource 结果和最近 MCP 工具结果）。"""
+        resource_parts: list[str] = []
+        mcp_part: str | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if not isinstance(msg, ToolMessage):
+                continue
+            try:
+                obs = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                if not isinstance(obs, dict) or not obs.get("success"):
+                    continue
+            except Exception:
+                continue
+            # 查找对应的 AIMessage 获取工具名
+            tool_name = ""
+            tool_call_id = getattr(msg, "tool_call_id", "")
+            for j in range(i - 1, max(i - 5, -1), -1):
+                prev = messages[j]
+                if isinstance(prev, AIMessage) and getattr(prev, "tool_calls", None):
+                    for tc in prev.tool_calls:
+                        if tc.get("id") == tool_call_id:
+                            tool_name = tc.get("name", "")
+                            break
+                    if tool_name:
+                        break
+            if tool_name == "read_resource" and len(resource_parts) < 2:
+                content_text = str(obs.get("content") or obs.get("data") or "")[:500]
+                if content_text:
+                    resource_parts.append(f"### {obs.get('uri', 'resource')}\n{content_text}")
+            elif tool_name and tool_name not in ("read_memory", "write_memory", "read_resource") and not mcp_part:
+                content_text = str(obs.get("message") or obs.get("data") or "")[:300]
+                if content_text and obs.get("chain_length"):
+                    mcp_part = f"### {tool_name} (chain_length={obs['chain_length']})\n{content_text}"
+            if len(resource_parts) >= 2 and mcp_part:
+                break
+        if not resource_parts and not mcp_part:
+            return None
+        parts = ["## 压缩前的关键工具结果（供参考）\n"]
+        parts.extend(resource_parts)
+        if mcp_part:
+            parts.append(mcp_part)
+        return "\n\n".join(parts)
 
     @staticmethod
     def _qa_history_to_messages(user_text: str, qa_history: list[dict]) -> list[BaseMessage]:
@@ -956,6 +1078,9 @@ class AgentService:
 
     @staticmethod
     def _should_compact_state(state_values: dict) -> bool:
+        # 熔断器：连续失败 ≥ MAX_COMPACT_FAILURES 次后停止尝试
+        if state_values.get("compact_failures", 0) >= MAX_COMPACT_FAILURES:
+            return False
         messages = state_values.get("messages") or []
         if len(messages) >= 24:
             return True
@@ -977,13 +1102,30 @@ class AgentService:
         prior_summary = state_values.get("compact_summary")
         compact_generation = int(state_values.get("compact_generation", 0)) + 1
         compacted_thread_id = f"{session_id}:c{compact_generation}"
-        summary = await compact_history(
-            state_values.get("messages") or [],
-            self._compact_llm,
-            user_text=user_text,
-            chain_snapshot=state_values.get("chain_snapshot") or session_context,
-            prior_summary=prior_summary,
-        )
+        try:
+            summary = await compact_history(
+                state_values.get("messages") or [],
+                self._compact_llm,
+                user_text=user_text,
+                chain_snapshot=state_values.get("chain_snapshot") or session_context,
+                prior_summary=prior_summary,
+            )
+            if not summary or summary == (prior_summary or "").strip():
+                raise ValueError("Compact returned empty or unchanged summary")
+        except Exception as exc:
+            failures = state_values.get("compact_failures", 0) + 1
+            logger.warning(
+                "Compact failed (attempt %d/%d) session=%s: %s",
+                failures, MAX_COMPACT_FAILURES, session_id, exc,
+            )
+            if failures >= MAX_COMPACT_FAILURES:
+                logger.warning("Compact circuit breaker tripped session=%s, will not retry", session_id)
+            # 失败时不创建新线程，仅递增失败计数
+            fallback_state = {
+                "compact_failures": failures,
+            }
+            return agent_thread_id, fallback_state
+
         compacted_messages = self._build_initial_messages(
             user_text=user_text,
             session_context=state_values.get("chain_snapshot") or session_context,
@@ -991,6 +1133,11 @@ class AgentService:
             memory_index=memory_index,
             conversation_summary=summary,
         )
+        # 压缩后资源恢复：从旧消息中提取关键 read_resource/MCP 工具结果
+        resource_context = self._extract_post_compact_context(state_values.get("messages") or [])
+        if resource_context:
+            # 插入到最后一条 HumanMessage 之前
+            compacted_messages.insert(-1, SystemMessage(content=resource_context))
         compacted_state = {
             **self._base_state_fields(session_id, user_id, token_quota),
             "messages": compacted_messages,
@@ -1001,6 +1148,7 @@ class AgentService:
             "chain_snapshot": state_values.get("chain_snapshot") or session_context,
             "compact_summary": summary,
             "compact_generation": compact_generation,
+            "compact_failures": 0,  # 成功时重置熔断计数
         }
         logger.info(
             "Compacted planning thread session=%s agentThread=%s -> %s generation=%s",
@@ -1151,16 +1299,22 @@ class AgentService:
                 raw_index: list[dict] = []
                 if memory_client:
                     raw_index = await memory_client.list_index(session_id=session_id)
+                # 提取当前可用工具名称用于记忆召回的工具感知
+                existing_tools = existing.values.get("openai_tools") or []
+                active_tools = [t.get("function", {}).get("name", "") for t in existing_tools if t.get("function")]
                 memory_index = await self._filter_relevant_memories(
                     user_text,
                     raw_index[:MEMORY_INDEX_SCAN_LIMIT],
                     self._compact_llm,
                     surfaced_paths=existing.values.get("surfaced_memory_paths") or [],
+                    active_tool_names=active_tools or None,
                 ) if raw_index else []
+                # 构建 filePath→updatedAt 映射，用于 read_memory 时注入新鲜度警告
+                mem_updated_map = {e.get("filePath", ""): e.get("updatedAt", "") for e in raw_index if e.get("filePath")}
 
                 if self._should_compact_state(existing.values):
                     # 需要压缩时，重建状态并注入记忆
-                    current_thread_id, initial_state = await self._build_compacted_state(
+                    current_thread_id, compact_result = await self._build_compacted_state(
                         state_values=existing.values,
                         session_id=session_id,
                         agent_thread_id=current_thread_id,
@@ -1171,6 +1325,25 @@ class AgentService:
                         token_quota=token_quota,
                         memory_index=memory_index,
                     )
+                    if "messages" in compact_result:
+                        # 压缩成功：使用全新压缩状态，注入记忆新鲜度映射
+                        compact_result["memory_updated_at_map"] = mem_updated_map
+                        initial_state = compact_result
+                    else:
+                        # 压缩失败：回退到追加模式，仅更新 compact_failures
+                        messages_to_add = [HumanMessage(content=user_text)]
+                        if memory_index:
+                            memory_prompt = self._build_memory_index_message(memory_index)
+                            messages_to_add.insert(0, SystemMessage(content=memory_prompt))
+                        initial_state = {
+                            "messages": messages_to_add,
+                            "done": False, "result": None, "action": None,
+                            "iterations": 0, "total_tokens": 0,
+                            "prompt_tokens": 0, "completion_tokens": 0,
+                            "token_quota": token_quota,
+                            "memory_updated_at_map": mem_updated_map,
+                            **compact_result,  # 含 compact_failures
+                        }
                     config = {"configurable": {"thread_id": current_thread_id}}
                 else:
                     # 不需要压缩时，只追加新消息，但如果有相关记忆，也注入系统提示
@@ -1186,6 +1359,7 @@ class AgentService:
                         "iterations": 0, "total_tokens": 0,
                         "prompt_tokens": 0, "completion_tokens": 0,
                         "token_quota": token_quota,
+                        "memory_updated_at_map": mem_updated_map,
                     }
             else:
                 # 路径2/3：新会话——并行执行 MCP 初始化 + common 记忆加载，消除串行等待
@@ -1204,6 +1378,7 @@ class AgentService:
                     raw_index[:MEMORY_INDEX_SCAN_LIMIT],
                     self._compact_llm,
                 ) if raw_index else []
+                mem_updated_map = {e.get("filePath", ""): e.get("updatedAt", "") for e in raw_index if e.get("filePath")}
                 if qa_history:
                     # 路径2：checkpoint 丢失，从 Java 历史记录降级恢复
                     logger.warning("Checkpoint missing session=%s, recovering from qa_history len=%d",
@@ -1225,7 +1400,8 @@ class AgentService:
                     )
                 initial_state = {**self._base_state_fields(session_id, user_id, token_quota),
                                  "messages": msgs,
-                                 "compact_summary": conversation_summary}
+                                 "compact_summary": conversation_summary,
+                                 "memory_updated_at_map": mem_updated_map}
 
             last_state, timed_out = await self._run_graph(graph, initial_state, config, session_id)
 
