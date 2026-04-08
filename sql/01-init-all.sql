@@ -525,3 +525,8 @@ CREATE TABLE IF NOT EXISTS db_platform.user_memory_files (
     UNIQUE (user_id, file_path)
 );
 CREATE INDEX IF NOT EXISTS idx_umf_user_session ON db_platform.user_memory_files (user_id, session_id);
+
+-- 兼容迁移：记忆增强字段（seq 递增序号、phase 阶段标签、block_chain_hash 轮次标识）
+ALTER TABLE db_platform.user_memory_files ADD COLUMN IF NOT EXISTS seq              INTEGER DEFAULT NULL;
+ALTER TABLE db_platform.user_memory_files ADD COLUMN IF NOT EXISTS phase            VARCHAR(20) DEFAULT NULL;
+ALTER TABLE db_platform.user_memory_files ADD COLUMN IF NOT EXISTS block_chain_hash VARCHAR(10) DEFAULT NULL;

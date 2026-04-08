@@ -57,6 +57,15 @@ public class UserMemoryFile {
     /** 写入来源，为多 Agent 并行调度预留追溯字段 */
     private String agentType;
 
+    /** 递增序号：common 记忆 per-user 递增，session 记忆 per-agentThreadId 递增 */
+    private Integer seq;
+
+    /** 阶段标签："规划" | "执行" | null（common 记忆无此字段） */
+    private String phase;
+
+    /** block chain 内容哈希前6位，标识属于哪个积木链版本/轮次 */
+    private String blockChainHash;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

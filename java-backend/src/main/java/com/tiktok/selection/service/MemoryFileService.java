@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -75,7 +76,8 @@ public class MemoryFileService {
         return memoryFileMapper.selectList(wrapper).stream()
                 .map(f -> new MemoryIndexEntry(
                         f.getName(), f.getDescription(), f.getMemoryType(),
-                        f.getFilePath(), f.getAgentType(), f.getUpdatedAt()))
+                        f.getFilePath(), f.getAgentType(), f.getUpdatedAt(),
+                        f.getSeq(), f.getPhase(), f.getBlockChainHash()))
                 .collect(Collectors.toList());
     }
 
@@ -97,29 +99,40 @@ public class MemoryFileService {
 
     /**
      * 写入一条记忆：写文件 → upsert DB → 重建 MEMORY.md。
-     *
-     * @param userId      用户ID
-     * @param sessionId   NULL = common 跨会话记忆
-     * @param scope       "common" | "session"
-     * @param memoryType  user / feedback / project / reference
-     * @param name        记忆名称（用于生成文件名）
-     * @param description 一句话摘要
-     * @param content     记忆正文 Markdown
-     * @param agentType   写入来源（main/distillation，多Agent追溯用）
-     * @return 相对路径（可存入 DB 或返回给调用方）
+     * 向后兼容：phase 和 blockChainHash 可为 null。
      */
     public String writeMemory(String userId, String sessionId, String scope,
                               String memoryType, String name, String description,
                               String content, String agentType) throws IOException {
+        return writeMemory(userId, sessionId, scope, memoryType, name, description, content, agentType, null, null);
+    }
+
+    /**
+     * 写入一条记忆（增强版）：写文件 → upsert DB（含 seq/phase/chainHash）→ 重建 MEMORY.md。
+     *
+     * @param userId         用户ID
+     * @param sessionId      NULL = common 跨会话记忆，否则为 agentThreadId
+     * @param scope          "common" | "session"
+     * @param memoryType     user / feedback / project / reference
+     * @param name           记忆名称（用于生成文件名）
+     * @param description    一句话摘要
+     * @param content        记忆正文 Markdown
+     * @param agentType      写入来源（main/distillation/memory）
+     * @param phase          阶段标签："规划" | "执行" | null
+     * @param blockChainHash block chain 哈希前6位，标识轮次；null 表示 common 记忆
+     * @return 相对路径
+     */
+    public String writeMemory(String userId, String sessionId, String scope,
+                              String memoryType, String name, String description,
+                              String content, String agentType,
+                              String phase, String blockChainHash) throws IOException {
         String fileName    = sanitizeFileName(name);
         String relativePath = buildRelativePath(userId, sessionId, scope, fileName);
 
-        // OS 级文件锁，跨 Docker 实例互斥；进程崩溃后自动释放
         Path lockFile = Paths.get(memoryRoot).resolve(userId).resolve(".write.lock");
         try {
             FileLock fileLock = FileLockHelper.acquire(lockFile, 50, 100L);
             try {
-                // 1. 写文件
                 Path filePath = Paths.get(memoryRoot).resolve(relativePath).normalize();
                 validatePath(userId, filePath);
                 Files.createDirectories(filePath.getParent());
@@ -127,13 +140,13 @@ public class MemoryFileService {
                         StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
-                // 2. upsert DB 记录
-                upsertRecord(userId, sessionId, relativePath, memoryType, name, description, agentType);
+                upsertRecord(userId, sessionId, relativePath, memoryType, name, description,
+                        agentType, phase, blockChainHash);
 
-                // 3. 重建该 scope 的 MEMORY.md
                 regenerateIndex(userId, sessionId, scope);
 
-                log.info("MEMORY_WRITE userId={} scope={} name={} path={}", userId, scope, name, relativePath);
+                log.info("MEMORY_WRITE userId={} scope={} name={} seq={} phase={} chain={}",
+                        userId, scope, name, getLatestSeq(userId, sessionId), phase, blockChainHash);
                 return relativePath;
             } finally {
                 fileLock.release();
@@ -148,7 +161,8 @@ public class MemoryFileService {
     // ─── 私有实现 ───────────────────────────────────────────────────────────
 
     private void upsertRecord(String userId, String sessionId, String filePath,
-                               String memoryType, String name, String description, String agentType) {
+                               String memoryType, String name, String description,
+                               String agentType, String phase, String blockChainHash) {
         LambdaQueryWrapper<UserMemoryFile> wrapper = Wrappers.lambdaQuery(UserMemoryFile.class)
                 .eq(UserMemoryFile::getUserId, userId)
                 .eq(UserMemoryFile::getFilePath, filePath);
@@ -164,6 +178,9 @@ public class MemoryFileService {
             record.setName(name);
             record.setDescription(description);
             record.setAgentType(agentType);
+            record.setPhase(phase);
+            record.setBlockChainHash(blockChainHash);
+            record.setSeq(getNextSeq(userId, sessionId));
             record.setCreatedAt(now);
             record.setUpdatedAt(now);
             memoryFileMapper.insert(record);
@@ -172,9 +189,36 @@ public class MemoryFileService {
             existing.setName(name);
             existing.setDescription(description);
             existing.setAgentType(agentType);
+            existing.setPhase(phase);
+            existing.setBlockChainHash(blockChainHash);
             existing.setUpdatedAt(now);
+            // seq 不变，保持创建时分配的序号
             memoryFileMapper.updateById(existing);
         }
+    }
+
+    /**
+     * 获取下一个 seq：common(sessionId=null) 按 userId 递增，session 按 sessionId 递增。
+     */
+    private int getNextSeq(String userId, String sessionId) {
+        LambdaQueryWrapper<UserMemoryFile> wrapper = Wrappers.lambdaQuery(UserMemoryFile.class)
+                .eq(UserMemoryFile::getUserId, userId)
+                .ne(UserMemoryFile::getMemoryType, "index");
+        if (sessionId != null) {
+            wrapper.eq(UserMemoryFile::getSessionId, sessionId);
+        } else {
+            wrapper.isNull(UserMemoryFile::getSessionId);
+        }
+        wrapper.orderByDesc(UserMemoryFile::getSeq).last("LIMIT 1");
+        UserMemoryFile latest = memoryFileMapper.selectOne(wrapper);
+        return (latest != null && latest.getSeq() != null) ? latest.getSeq() + 1 : 1;
+    }
+
+    /**
+     * 获取最新 seq（日志用）。
+     */
+    private int getLatestSeq(String userId, String sessionId) {
+        return Math.max(1, getNextSeq(userId, sessionId) - 1);
     }
 
     private static final int    INDEX_MAX_ROWS    = 200;
@@ -184,35 +228,44 @@ public class MemoryFileService {
     private void regenerateIndex(String userId, String sessionId, String scope) throws IOException {
         LambdaQueryWrapper<UserMemoryFile> wrapper = Wrappers.lambdaQuery(UserMemoryFile.class)
                 .eq(UserMemoryFile::getUserId, userId)
-                // MEMORY.md 本身不纳入索引内容
                 .ne(UserMemoryFile::getMemoryType, "index");
         if ("common".equals(scope)) {
             wrapper.isNull(UserMemoryFile::getSessionId);
         } else {
             wrapper.eq(UserMemoryFile::getSessionId, sessionId);
         }
-        wrapper.orderByAsc(UserMemoryFile::getUpdatedAt);
+        wrapper.orderByAsc(UserMemoryFile::getSeq);
 
         List<UserMemoryFile> records = memoryFileMapper.selectList(wrapper);
 
-        // 超过 200 条只取最新 200 条（参考 Claude Code MEMORY.md 硬限制）
         if (records.size() > INDEX_MAX_ROWS) {
             records = records.subList(records.size() - INDEX_MAX_ROWS, records.size());
         }
 
         StringBuilder sb = new StringBuilder("# Memory Index\n\n");
+
+        // 按 blockChainHash 分组输出，null hash 归入 common 组
+        String currentHash = "\0";
         for (UserMemoryFile r : records) {
+            String hash = r.getBlockChainHash();
+            if (!Objects.equals(hash, currentHash)) {
+                currentHash = hash;
+                if (hash != null) {
+                    sb.append(String.format("%n## chain:%s%n", hash));
+                } else {
+                    sb.append(String.format("%n## common — 用户画像%n"));
+                }
+            }
             String fileName = Paths.get(r.getFilePath()).getFileName().toString();
             String desc = r.getDescription() != null ? r.getDescription() : "";
-            String line = String.format("- [%s](%s) — %s%n", r.getName(), fileName, desc);
-            // 单行超 150 字符截断
+            int seq = r.getSeq() != null ? r.getSeq() : 0;
+            String line = String.format("- #%d [%s](%s) — %s%n", seq, r.getName(), fileName, desc);
             if (line.length() > INDEX_MAX_LINE) {
                 line = line.substring(0, INDEX_MAX_LINE) + "\n";
             }
             sb.append(line);
         }
 
-        // 整体超 25KB 截断
         if (sb.length() > INDEX_MAX_BYTES) {
             sb.setLength(INDEX_MAX_BYTES);
             sb.append("\n\n> WARNING: MEMORY.md 超过 25KB，已截断。\n");
@@ -225,8 +278,7 @@ public class MemoryFileService {
         Files.writeString(indexPath, sb.toString(), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
-        // 将 MEMORY.md 自身入库，建立 (userId, sessionId) → 索引路径的显式映射
-        upsertRecord(userId, sessionId, indexRelPath, "index", "MEMORY", "该 scope 的记忆索引文件", "system");
+        upsertRecord(userId, sessionId, indexRelPath, "index", "MEMORY", "该 scope 的记忆索引文件", "system", null, null);
     }
 
     /**
@@ -302,6 +354,9 @@ public class MemoryFileService {
             String memoryType,
             String filePath,
             String agentType,
-            LocalDateTime updatedAt
+            LocalDateTime updatedAt,
+            Integer seq,
+            String phase,
+            String blockChainHash
     ) {}
 }
