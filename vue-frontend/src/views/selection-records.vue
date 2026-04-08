@@ -58,7 +58,11 @@
             {{ row.echotikApiCalls ?? 0 }}
           </template>
         </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" width="180" align="center" />
+        <el-table-column prop="createTime" label="创建时间" width="180" align="center">
+          <template #default="{ row }">
+            {{ row.createTime?.slice(0, 16).replace('T', ' ') || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="160" align="center" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleView(row)">
@@ -286,11 +290,11 @@ function getSourceTagType(sourceType: string): string {
 }
 
 function formatSourceType(sourceType: string): string {
+  if (!sourceType) return 'AI对话'
   const typeMap: Record<string, string> = {
     'user_plan': '方案库',
     'preset': '预设模板',
     'ai_conversation': 'AI对话',
-    '': '未知'
   }
   return typeMap[sourceType] || sourceType
 }

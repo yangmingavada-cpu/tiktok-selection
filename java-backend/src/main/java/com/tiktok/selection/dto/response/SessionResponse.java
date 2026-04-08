@@ -64,6 +64,16 @@ public class SessionResponse {
     private ConversationSnapshot conversationSnapshot;
 
     /**
+     * 执行前审计结果
+     */
+    private Map<String, Object> auditResult;
+
+    /**
+     * 竞品洞察分析报告（Markdown）
+     */
+    private String competitorAnalysis;
+
+    /**
      * 用户备注信息
      */
     private String remark;

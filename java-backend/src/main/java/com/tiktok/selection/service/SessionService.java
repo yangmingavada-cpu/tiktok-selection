@@ -83,6 +83,7 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         session.setSourceType(request.getSourceType());
         session.setSourceText(request.getSourceText());
         session.setSourcePlanId(request.getSourcePlanId());
+        session.setAgentThreadId(request.getAgentThreadId());
         session.setBlockChain(List.copyOf(request.getBlockChain()));
         session.setEchotikApiCalls(0);
         session.setLlmTotalTokens(0L);
@@ -325,6 +326,8 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         response.setUpdateTime(session.getUpdateTime());
         response.setStepCount(stepCount);
         response.setRemark(session.getRemark());
+        response.setAuditResult(session.getAuditResult());
+        response.setCompetitorAnalysis(session.getCompetitorAnalysis());
 
         // 解析 conversationSnapshot
         if (session.getConversationSnapshot() != null) {
