@@ -20,6 +20,7 @@ import com.tiktok.selection.service.CategoryService;
 import com.tiktok.selection.service.EchotikApiKeyService;
 import com.tiktok.selection.service.IntentService;
 import com.tiktok.selection.service.LlmConfigService;
+import com.tiktok.selection.service.MemoryFileService;
 import com.tiktok.selection.service.QuotaService;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
@@ -29,12 +30,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Block编排器，负责按Block链顺序执行各Block并管理数据流转。
@@ -73,6 +76,7 @@ public class BlockOrchestrator {
     private final IntentService intentService;
     private final LlmConfigService llmConfigService;
     private final CategoryService categoryService;
+    private final MemoryFileService memoryFileService;
 
     /** 执行阶段累计 LLM token 预算，覆盖语义评分和 AI 评语等执行型能力 */
     @Value("${ai.budget.session-execute-token-quota:120000}")
@@ -88,7 +92,8 @@ public class BlockOrchestrator {
                              EchotikApiKeyService echotikApiKeyService,
                              @Lazy IntentService intentService,
                              LlmConfigService llmConfigService,
-                             CategoryService categoryService) {
+                             CategoryService categoryService,
+                             MemoryFileService memoryFileService) {
         this.blockExecutorRegistry = blockExecutorRegistry;
         this.sseEmitterManager     = sseEmitterManager;
         this.sessionMapper         = sessionMapper;
@@ -100,6 +105,7 @@ public class BlockOrchestrator {
         this.intentService         = intentService;
         this.llmConfigService      = llmConfigService;
         this.categoryService       = categoryService;
+        this.memoryFileService     = memoryFileService;
     }
 
     // ─── 字段中文映射 ──────────────────────────────────────────────────────────
@@ -334,6 +340,11 @@ public class BlockOrchestrator {
                 List<Map<String, Object>> displayData = translateForDisplay(state.inputData);
                 updateCurrentView(sessionId, displayData, stepDims, state.currentOutputType);
                 sendStepComplete(sessionId, seq, totalSteps, blockId, result, stepDims, displayData);
+
+                // 每步执行后将原始数据写入记忆系统（用 agentThreadId 作为记忆隔离键）
+                String label = blockDef.get("label") instanceof String l ? l : blockId;
+                String memorySessionId = session.getAgentThreadId() != null ? session.getAgentThreadId() : sessionId;
+                writeStepDataToMemory(session.getUserId(), memorySessionId, seq, blockId, label, config, result, displayData, stepDims);
             }
 
             // 正常完成
@@ -571,6 +582,89 @@ public class BlockOrchestrator {
         sseEmitterManager.sendEvent(sessionId,
                 SseProgressEvent.stepComplete(sessionId, seq, total, blockId, msg,
                         displayData, dims));
+    }
+
+    /**
+     * 将每步执行的原始数据写入记忆系统，供后续对话中 AI 检索回答用户提问。
+     * 写入失败不影响主流程。
+     */
+    private void writeStepDataToMemory(String userId, String sessionId,
+                                        int seq, String blockId, String label,
+                                        Map<String, Object> config,
+                                        BlockResult result,
+                                        List<Map<String, Object>> displayData,
+                                        List<Map<String, Object>> stepDims) {
+        try {
+            String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            int outputCount = result.getOutputCount() != null ? result.getOutputCount() : 0;
+            List<String> apis = result.getApiEndpointsCalled();
+            String apiStr = (apis != null && !apis.isEmpty()) ? String.join(", ", apis) : "本地计算";
+
+            // 字段列表（中文标签）
+            String fieldsStr = stepDims.stream()
+                    .map(d -> d.getOrDefault("label", d.get("id")).toString())
+                    .collect(Collectors.joining(", "));
+
+            // description 用于索引检索匹配
+            String description = String.format("%s | blockId=%s | seq=%d | %s | %d条 | %s",
+                    now, blockId, seq, apiStr, outputCount, fieldsStr.length() > 80 ? fieldsStr.substring(0, 80) : fieldsStr);
+
+            // 构建 Markdown 正文
+            StringBuilder content = new StringBuilder();
+            content.append("## 执行信息\n");
+            content.append("- 时间: ").append(now).append("\n");
+            content.append("- 积木ID (blockId): ").append(blockId).append("\n");
+            content.append("- 步骤序号 (seq): ").append(seq).append("\n");
+            content.append("- 积木标签: ").append(label).append("\n");
+            content.append("- 积木配置: ").append(config).append("\n");
+            content.append("- API端点: ").append(apiStr).append("\n");
+            content.append("- 耗时: ").append(result.getDurationMs()).append("ms\n");
+            content.append("- API调用: ").append(result.getEchotikApiCalls()).append("次\n");
+            content.append("- 输出数据量: ").append(outputCount).append("条\n\n");
+
+            // 数据字段
+            content.append("## 数据字段\n");
+            for (Map<String, Object> dim : stepDims) {
+                content.append("- ").append(dim.get("id")).append(" (").append(dim.getOrDefault("label", "")).append(")\n");
+            }
+            content.append("\n");
+
+            // 数据明细（前50条，Markdown 表格）
+            int dataLimit = Math.min(50, displayData.size());
+            if (dataLimit > 0 && !stepDims.isEmpty()) {
+                content.append("## 数据明细（前").append(dataLimit).append("条）\n");
+
+                // 表头
+                List<String> headers = stepDims.stream()
+                        .map(d -> d.getOrDefault("label", d.get("id")).toString())
+                        .toList();
+                List<String> fieldIds = stepDims.stream()
+                        .map(d -> d.get("id").toString())
+                        .toList();
+                content.append("| # | ").append(String.join(" | ", headers)).append(" |\n");
+                content.append("|---|").append(headers.stream().map(h -> "---").collect(Collectors.joining("|"))).append("|\n");
+
+                // 数据行
+                for (int r = 0; r < dataLimit; r++) {
+                    Map<String, Object> row = displayData.get(r);
+                    content.append("| ").append(r + 1);
+                    for (String fid : fieldIds) {
+                        Object val = row.get(fid);
+                        String cell = val != null ? val.toString().replace("|", "\\|").replace("\n", " ") : "";
+                        if (cell.length() > 50) cell = cell.substring(0, 47) + "...";
+                        content.append(" | ").append(cell);
+                    }
+                    content.append(" |\n");
+                }
+            }
+
+            String name = "步骤" + seq + "-" + label;
+            memoryFileService.writeMemory(userId, sessionId, "session", "project",
+                    name, description, content.toString(), "main");
+
+        } catch (Exception e) {
+            log.warn("写入步骤记忆失败 sessionId={} seq={}: {}", sessionId, seq, e.getMessage());
+        }
     }
 
     /** 检查 session 是否已被取消（直接读 DB） */

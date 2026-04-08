@@ -40,4 +40,9 @@ public class SessionCreateRequest {
      * 会话标题（可选）
      */
     private String title;
+
+    /**
+     * 对话线程ID（LangGraph checkpoint 标识，用于会话级记忆隔离）
+     */
+    private String agentThreadId;
 }

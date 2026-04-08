@@ -8,6 +8,7 @@ export interface SessionCreateRequest {
   sourcePlanId?: string
   sourceText?: string
   title?: string
+  agentThreadId?: string
 }
 
 export function createSession(data: SessionCreateRequest) {

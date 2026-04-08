@@ -14,6 +14,7 @@
         @refresh="refreshHistorySessions"
         @delete-session="handleDeleteSessionSoft"
         @restore-conversation="handleRestoreConversation"
+        @create-new="resetConversation"
       />
 
       <!-- 左：AI 对话区 -->
@@ -193,6 +194,34 @@ const {
   statusFilter: ['created', 'in_progress', 'paused', 'completed', 'failed'],
   cachePrefix: 'conversation-history'
 })
+
+// ── 新建对话：重置全部状态 ────────────────────────
+function resetConversation() {
+  finishPlanning()
+  resetPlanningThread()
+  eventSource?.close()
+  eventSource = null
+  execEventSource?.close()
+  clearResultSyncLoop()
+
+  messages.value = []
+  steps.value = []
+  lastBlockChain.value = null
+  pendingPlan.value = false
+  qaHistory.value = []
+  inputText.value = ''
+  thinking.value = false
+  creating.value = false
+  thinkingText.value = ''
+  confirmingDraft.value = false
+  planningTrace.value = []
+  originalRequest.value = ''
+  lastPlanThreadId.value = ''
+  lastPlanAgentThreadId.value = ''
+  archivedPlanningSessionId = ''
+
+  addMessage({ role: 'ai', text: GREETING, isGreeting: true })
+}
 
 // 对话历史：只显示未执行或规划中的会话
 const historySessions = computed(() => allConversations.value)
@@ -426,8 +455,8 @@ function finishPlanning() {
 
 function resetPlanningThread() {
   planningThreadId.value = ''
-  planningAgentThreadId.value = ''
-  planningConversationSummary.value = ''
+  // agentThreadId 和 conversationSummary 不清空，保证整个对话生命周期内可续接
+  // 只有 resetConversation()（新建对话）才会全部清空
 }
 
 function updatePlanningThreadMeta(data?: { agentThreadId?: string; conversationSummary?: string }) {
@@ -635,9 +664,10 @@ async function submitPrompt(rawText: string) {
   const res = await parseIntent({
       userText: contextText,
       buildSessionId,
-      agentThreadId: planningAgentThreadId.value || undefined,
+      agentThreadId: planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined,
       conversationSummary: planningConversationSummary.value || undefined,
       sessionContext: lastBlockChain.value ? { blockChain: lastBlockChain.value } : undefined,
+      qaHistory: qaHistory.value.length > 0 ? qaHistory.value : undefined,
     })
     const data = res.data
 
@@ -846,14 +876,13 @@ async function confirmPlan(plan: unknown[], sourceText?: string) {
       blockChain: plan as Block[],
       sourceText: titleSrc,
       title: titleSrc.substring(0, 30) || undefined,
+      agentThreadId: planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined,
     })
     const sessionId = res.data?.id
     pendingPlan.value = false
-    resetPlanningThread()
-    lastPlanThreadId.value = ''
-    lastPlanAgentThreadId.value = ''
+    planningThreadId.value = ''
+    // 保留 agentThreadId，执行完成后用户还能继续对话
     lastBlockChain.value = plan as Block[]
-    qaHistory.value = []
     if (res.data) {
       prependSession(res.data)
     }

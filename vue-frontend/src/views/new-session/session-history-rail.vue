@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { ArrowRight, Clock, Delete, Plus, RefreshRight } from '@element-plus/icons-vue'
 import type { Session } from '@/types'
 
@@ -15,9 +14,8 @@ const emit = defineEmits<{
   refresh: []
   deleteSession: [session: Session]
   restoreConversation: [session: Session]
+  createNew: []
 }>()
-
-const router = useRouter()
 
 const cacheText = computed(() => {
   if (!props.cacheUpdatedAt) return ''
@@ -35,7 +33,7 @@ function openSession(session: Session) {
 }
 
 function createNewSession() {
-  router.push({ name: 'NewSession' })
+  emit('createNew')
 }
 </script>
 

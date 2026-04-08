@@ -30,6 +30,12 @@ public class Session {
     private String sourcePlanId;
     private String matchedPreset;
 
+    /**
+     * 对话线程ID（LangGraph checkpoint 的稳定标识，整个对话生命周期唯一）
+     * 用于会话级记忆的隔离键
+     */
+    private String agentThreadId;
+
     @TableField(typeHandler = JacksonTypeHandler.class)
     private List<Object> blockChain;
 
