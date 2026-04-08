@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.security.MessageDigest;
 
 /**
  * Block编排器，负责按Block链顺序执行各Block并管理数据流转。
@@ -295,6 +296,8 @@ public class BlockOrchestrator {
 
         String sessionId  = session.getId();
         int    totalSteps = blockChain.size();
+        // 计算 blockChain 哈希前6位，用于记忆轮次标识
+        String chainHash = computeChainHash(blockChain);
 
         try {
             for (int i = startIndex; i < totalSteps; i++) {
@@ -344,7 +347,7 @@ public class BlockOrchestrator {
                 // 每步执行后将原始数据写入记忆系统（用 agentThreadId 作为记忆隔离键）
                 String label = blockDef.get("label") instanceof String l ? l : blockId;
                 String memorySessionId = session.getAgentThreadId() != null ? session.getAgentThreadId() : sessionId;
-                writeStepDataToMemory(session.getUserId(), memorySessionId, seq, blockId, label, config, result, displayData, stepDims);
+                writeStepDataToMemory(session.getUserId(), memorySessionId, seq, blockId, label, config, result, displayData, stepDims, chainHash);
             }
 
             // 正常完成
@@ -593,7 +596,8 @@ public class BlockOrchestrator {
                                         Map<String, Object> config,
                                         BlockResult result,
                                         List<Map<String, Object>> displayData,
-                                        List<Map<String, Object>> stepDims) {
+                                        List<Map<String, Object>> stepDims,
+                                        String chainHash) {
         try {
             String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             int outputCount = result.getOutputCount() != null ? result.getOutputCount() : 0;
@@ -660,7 +664,7 @@ public class BlockOrchestrator {
 
             String name = "步骤" + seq + "-" + label;
             memoryFileService.writeMemory(userId, sessionId, "session", "project",
-                    name, description, content.toString(), "main");
+                    name, description, content.toString(), "main", "执行", chainHash);
 
         } catch (Exception e) {
             log.warn("写入步骤记忆失败 sessionId={} seq={}: {}", sessionId, seq, e.getMessage());
@@ -668,6 +672,21 @@ public class BlockOrchestrator {
     }
 
     /** 检查 session 是否已被取消（直接读 DB） */
+    /**
+     * 计算 blockChain 内容的 MD5 哈希前6位，用于记忆轮次标识。
+     */
+    private static String computeChainHash(List<Map<String, Object>> blockChain) {
+        try {
+            String json = blockChain.toString();
+            byte[] digest = MessageDigest.getInstance("MD5").digest(json.getBytes());
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            return sb.substring(0, 6);
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
     private boolean isCancelled(String sessionId) {
         Session s = sessionMapper.selectById(sessionId);
         return s == null || SessionStatusEnum.CANCELLED.getValue().equals(s.getStatus());
@@ -820,7 +839,7 @@ public class BlockOrchestrator {
 
     /**
      * 执行成功后触发后处理管道（fire-and-forget）：蒸馏记忆 + 竞品洞察。
-     * agentThreadId 使用 session.getId() 作为最佳猜测（Python 默认 agentThreadId=sessionId）。
+     * agentThreadId 从 Session 实体读取（创建时由前端传入）。
      */
     private void triggerPostExecutionPipeline(Session session, LoopState state) {
         try {
@@ -831,7 +850,7 @@ public class BlockOrchestrator {
             List<Map<String, Object>> blockChain = toBlockChain(
                     session.getBlockChain() != null ? session.getBlockChain() : new ArrayList<>());
             intentService.triggerPostExecutionPipeline(
-                    session.getId(), session.getUserId(), session.getId(), blockChain, selected);
+                    session.getId(), session.getUserId(), session.getAgentThreadId(), blockChain, selected);
         } catch (Exception e) {
             log.warn("Failed to trigger post-execution pipeline for sessionId={}: {}", session.getId(), e.getMessage());
         }
