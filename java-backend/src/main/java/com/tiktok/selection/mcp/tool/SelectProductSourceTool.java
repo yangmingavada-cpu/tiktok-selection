@@ -65,7 +65,7 @@ public class SelectProductSourceTool implements McpTool {
                         propOpt("ranking_period", "string", "榜单周期，product_ranking时必填",
                                 List.of("day", "week", "month")),
                         propOpt(RANKING_DATE_PARAM, "string", RANKING_DATE_DESC),
-                        propOpt("ranking_date_list", "array",
+                        propOptArrayStr("ranking_date_list",
                                 "多日期列表，与ranking_date互斥（优先级更高）。用户指定日期范围时使用，" +
                                 "例如[\"2026-04-01\",\"2026-04-02\",\"2026-04-03\",\"2026-04-04\"]。" +
                                 "执行引擎自动按product_id去重合并，同一商品保留销量最大的一条。"),

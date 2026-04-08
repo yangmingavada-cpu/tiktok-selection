@@ -159,6 +159,10 @@ ALTER TABLE db_session.session ADD COLUMN IF NOT EXISTS competitor_analysis  TEX
 COMMENT ON COLUMN db_session.session.audit_result IS '执行前审计结果: {pass, score, issues, suggestions}';
 COMMENT ON COLUMN db_session.session.competitor_analysis IS '竞品洞察分析报告（Markdown）';
 
+-- 兼容迁移：对话线程ID（LangGraph checkpoint 标识，用于会话级记忆隔离）
+ALTER TABLE db_session.session ADD COLUMN IF NOT EXISTS agent_thread_id VARCHAR(64) DEFAULT NULL;
+COMMENT ON COLUMN db_session.session.agent_thread_id IS '对话线程ID，整个对话生命周期唯一，用于会话级记忆隔离';
+
 CREATE TABLE IF NOT EXISTS db_session.session_data (
     session_id          VARCHAR(36) NOT NULL,
     current_view        JSONB DEFAULT NULL,
