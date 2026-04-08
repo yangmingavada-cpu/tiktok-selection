@@ -84,9 +84,6 @@ services:
       JAVA_BACKEND_URL: http://java-backend:8080
       MCP_SERVER_URL: http://java-backend:8080/mcp/jsonrpc
       MCP_INTERNAL_TOKEN: ${MCP_INTERNAL_TOKEN:-mcp-dev-token-change-in-production}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
-      LLM_API_KEY: ${LLM_API_KEY:-sk-xxx}
-      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-tiktok_redis_2026}
       REDIS_URL: redis://:${REDIS_PASSWORD:-tiktok_redis_2026}@redis:6379
     ports:
