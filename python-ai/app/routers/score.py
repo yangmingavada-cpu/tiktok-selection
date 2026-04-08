@@ -12,6 +12,7 @@ class ScoreEvaluateRequest(BaseModel):
     eval_prompt: str = Field(..., description="评分维度描述")
     max_score: int = Field(100, description="满分值")
     llm_config: LlmConfig | None = Field(None, description="LLM配置（由Java传入）")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
 
 
 class ScoreEvaluateResponse(BaseModel):
@@ -25,7 +26,12 @@ class ScoreEvaluateResponse(BaseModel):
 @router.post("/evaluate", response_model=ScoreEvaluateResponse)
 async def evaluate_score(request: ScoreEvaluateRequest):
     """LLM语义评分（每次最多5个商品）"""
-    llm_client = LLMClient(config=request.llm_config.model_dump() if request.llm_config else None)
+    configs = []
+    if request.llm_config:
+        configs.append(request.llm_config.model_dump())
+    if request.llm_config_fallbacks:
+        configs.extend(cfg.model_dump() for cfg in request.llm_config_fallbacks)
+    llm_client = LLMClient(configs=configs)
     result = await llm_client.semantic_score(
         products=request.products,
         criteria=request.eval_prompt,

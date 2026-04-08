@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.services.llm_factory import create_chat_llm
+from app.services.llm_factory import create_chat_llm_with_fallbacks
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,12 @@ _SYSTEM_PROMPT = """你是跨境电商选品方案的解读专家，帮助普通
 class InterpretService:
     """将 block chain 配置调用 LLM 转换为 Markdown 格式的方案解读报告。"""
 
-    def __init__(self, llm_config: dict | None = None, token_quota: int | None = None):
+    def __init__(self, llm_configs: list[dict] | None = None, token_quota: int | None = None):
         max_tokens = 3000
         if token_quota and token_quota > 0:
             max_tokens = min(max_tokens, token_quota)
         self._token_quota = token_quota
-        self._llm = create_chat_llm(llm_config, temperature=0.3, max_tokens=max_tokens)
+        self._llm = create_chat_llm_with_fallbacks(llm_configs or [], temperature=0.3, max_tokens=max_tokens)
 
     def _build_messages(self, block_chain: list[dict], user_memories: str | None = None) -> list:
         chain_json = json.dumps(block_chain, ensure_ascii=False, indent=2)

@@ -19,8 +19,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
+          <el-button text size="small" :loading="testingId === row.id" @click="handleTest(row)">测试</el-button>
           <el-button text size="small" @click="handleOpenEdit(row)">编辑</el-button>
           <el-popconfirm title="确认删除该LLM配置？" @confirm="handleDelete(row.id)">
             <template #reference>
@@ -75,9 +76,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
-import { listLlmConfigs, createLlmConfig, updateLlmConfig, deleteLlmConfig } from '@/api/admin'
+import { ElMessage } from 'element-plus'
+import { listLlmConfigs, createLlmConfig, updateLlmConfig, deleteLlmConfig, testLlmConfig } from '@/api/admin'
 import { useCrudTable } from '@/composables/useCrudTable'
 import type { LlmConfig, LlmConfigForm } from '@/types'
 
@@ -100,6 +102,25 @@ const {
 
 function handleOpenEdit(row: LlmConfig) {
   openEdit(row)
+}
+
+const testingId = ref('')
+
+async function handleTest(row: LlmConfig) {
+  testingId.value = row.id
+  try {
+    const res = await testLlmConfig(row.id)
+    const data = res.data
+    if (data.success) {
+      ElMessage.success(`${row.model} 连通成功 (${data.latency_ms}ms)`)
+    } else {
+      ElMessage.error(`${row.model} 测试失败: ${data.message}`)
+    }
+  } catch (e: any) {
+    ElMessage.error(`测试请求失败: ${e.message || e}`)
+  } finally {
+    testingId.value = ''
+  }
 }
 
 const rules = {

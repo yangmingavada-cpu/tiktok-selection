@@ -3,6 +3,7 @@ package com.tiktok.selection.controller;
 import com.tiktok.selection.common.R;
 import com.tiktok.selection.dto.request.LlmConfigSaveRequest;
 import com.tiktok.selection.dto.response.LlmConfigVO;
+import com.tiktok.selection.service.IntentService;
 import com.tiktok.selection.service.LlmConfigService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
@@ -11,6 +12,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 管理员 LLM配置管理接口
@@ -35,6 +37,7 @@ import java.util.List;
 public class AdminLlmConfigController {
 
     private final LlmConfigService llmConfigService;
+    private final IntentService intentService;
 
     @GetMapping
     public R<List<LlmConfigVO>> list() {
@@ -68,5 +71,11 @@ public class AdminLlmConfigController {
             @PathVariable @Pattern(regexp = ID_PATTERN, message = ID_PATTERN_MSG) String id) {
         llmConfigService.delete(id);
         return R.ok();
+    }
+
+    @PostMapping("/{id}/test")
+    public R<Map<String, Object>> test(
+            @PathVariable @Pattern(regexp = ID_PATTERN, message = ID_PATTERN_MSG) String id) {
+        return R.ok(intentService.testLlmConfig(id));
     }
 }

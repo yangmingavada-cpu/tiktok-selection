@@ -62,6 +62,10 @@ public class IntentService {
     @Value("${ai.budget.intent-interpret-token-quota:6000}")
     private int interpretTokenQuota;
 
+    /** 审计调用超时（秒），免费/慢模型需要更长时间 */
+    @Value("${ai.audit.timeout-seconds:90}")
+    private int auditTimeoutSeconds;
+
     /** MCP JSON-RPC 自身服务地址，用于 Python Agent 回调，从配置读取避免 localhost 硬编码 */
     @Value("${mcp.internal.self-url:http://localhost:8080}")
     private String mcpSelfUrl;
@@ -116,9 +120,8 @@ public class IntentService {
             sessionManager.getOrCreate(sessionId);
         }
 
-        // 获取LLM配置
-        LlmConfig llmConfig = llmConfigService.getActiveLlmConfig();
-        Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(llmConfig);
+        // 获取所有激活的LLM配置（支持 fallback）
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
 
         // MCP端点：从配置读取服务自身地址，避免 localhost 硬编码在容器环境下失效
         String mcpEndpoint = mcpSelfUrl + "/mcp/jsonrpc";
@@ -131,7 +134,10 @@ public class IntentService {
         requestBody.put("user_text", userText);
         requestBody.put("conversation_summary", conversationSummary);
         requestBody.put("session_context", sessionContext);
-        requestBody.put("llm_config", llmConfigMap);
+        requestBody.put("llm_config", llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
         requestBody.put("mcp_endpoint", mcpEndpoint);
         requestBody.put("token_quota", intentTokenQuota);
         if (qaHistory != null && !qaHistory.isEmpty()) {
@@ -271,12 +277,14 @@ public class IntentService {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> interpretBlockChain(List<Map<String, Object>> blockChain) {
-        LlmConfig llmConfig = llmConfigService.getActiveLlmConfig();
-        Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(llmConfig);
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("block_chain", blockChain);
-        requestBody.put("llm_config", llmConfigMap);
+        requestBody.put("llm_config", llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
         requestBody.put("token_quota", interpretTokenQuota);
 
         try {
@@ -311,15 +319,17 @@ public class IntentService {
                                                 String userId, String sessionId) {
         SseEmitter emitter = new SseEmitter(120_000L);
 
-        LlmConfig llmConfig = llmConfigService.getActiveLlmConfig();
-        Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(llmConfig);
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
 
         // 加载用户画像记忆（memoryType=user），注入 Python 以个性化解读报告风格
         String userMemories = loadUserMemories(userId);
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("block_chain", blockChain);
-        requestBody.put("llm_config", llmConfigMap);
+        requestBody.put("llm_config", llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
         requestBody.put("token_quota", interpretTokenQuota);
         if (userMemories != null) {
             requestBody.put("user_memories", userMemories);
@@ -408,8 +418,7 @@ public class IntentService {
                                              List<Map<String, Object>> selectedProducts) {
         String effectiveThreadId = (agentThreadId != null) ? agentThreadId : sessionId;
 
-        LlmConfig llmConfig = llmConfigService.getActiveLlmConfig();
-        Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(llmConfig);
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
 
         // 1. 蒸馏（fire-and-forget, 202）
         Map<String, Object> distillBody = new LinkedHashMap<>();
@@ -417,6 +426,10 @@ public class IntentService {
         distillBody.put("session_id",     sessionId);
         distillBody.put("agent_thread_id", effectiveThreadId);
         distillBody.put("block_chain",    blockChain);
+        distillBody.put("llm_config",     llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            distillBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
 
         webClient.post()
                 .uri(pythonAiBaseUrl + "/intent/distillation")
@@ -433,7 +446,10 @@ public class IntentService {
         if (selectedProducts != null && !selectedProducts.isEmpty()) {
             Map<String, Object> competitorBody = new LinkedHashMap<>();
             competitorBody.put("selected_products", selectedProducts);
-            competitorBody.put("llm_config",        llmConfigMap);
+            competitorBody.put("llm_config",        llmConfigs.get(0));
+            if (llmConfigs.size() > 1) {
+                competitorBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+            }
 
             webClient.post()
                     .uri(pythonAiBaseUrl + "/intent/competitor-stream")
@@ -486,10 +502,13 @@ public class IntentService {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> auditBlockChain(List<Map<String, Object>> blockChain) {
-        LlmConfig auditLlmConfig = llmConfigService.getActiveLlmConfig();
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("block_chain", blockChain);
-        body.put("llm_config", llmConfigService.toLlmConfigMap(auditLlmConfig));
+        body.put("llm_config", llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            body.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
 
         try {
             Map<String, Object> result = webClient.post()
@@ -498,12 +517,37 @@ public class IntentService {
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(Map.class)
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(auditTimeoutSeconds))
                     .block();
             return result != null ? result : Map.of("pass", true, "score", 0, "issues", List.of(), "suggestions", List.of());
         } catch (Exception e) {
             log.warn("Audit call failed, defaulting to pass: {}", e.getMessage());
             return Map.of("pass", true, "score", 0, "issues", List.of(), "suggestions", List.of());
+        }
+    }
+
+    /**
+     * 测试指定LLM配置是否可用：解密后调用 Python /intent/test-llm，返回测试结果。
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> testLlmConfig(String configId) {
+        LlmConfig config = llmConfigService.getById(configId);
+        Map<String, Object> llmConfigMap = llmConfigService.toLlmConfigMap(config);
+
+        Map<String, Object> body = Map.of("llm_config", llmConfigMap);
+
+        try {
+            return webClient.post()
+                    .uri(pythonAiBaseUrl + "/intent/test-llm")
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .timeout(Duration.ofSeconds(30))
+                    .block();
+        } catch (Exception e) {
+            log.warn("LLM config test failed configId={}: {}", configId, e.getMessage());
+            return Map.of("success", false, "latency_ms", 0, "model", config.getModel(),
+                    "message", "测试请求失败: " + e.getMessage());
         }
     }
 }

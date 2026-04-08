@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -16,7 +17,7 @@ from app.agents.distillation_agent import distill
 from app.agents.audit_agent import audit_chain
 from app.agents.competitor_agent import analyze_competitors
 from app.services.memory_client import MemoryClient
-from app.services.llm_factory import create_chat_llm
+from app.services.llm_factory import create_chat_llm, create_chat_llm_with_fallbacks
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,19 @@ router = APIRouter()
 _background_tasks: set = set()
 
 
+def _build_config_list(
+    primary: LlmConfig | None,
+    fallbacks: list[LlmConfig] | None,
+) -> list[dict]:
+    """将主配置 + 备选配置列表合并为 dict list，供 factory/client 使用。"""
+    configs: list[dict] = []
+    if primary:
+        configs.append(primary.model_dump())
+    if fallbacks:
+        configs.extend(cfg.model_dump() for cfg in fallbacks)
+    return configs
+
+
 class IntentParseRequest(BaseModel):
     session_id: str = Field(..., description="构建会话ID（由Java生成的UUID）")
     agent_thread_id: str | None = Field(None, description="规划Agent线程ID；未传时默认等于session_id")
@@ -35,6 +49,7 @@ class IntentParseRequest(BaseModel):
     conversation_summary: str | None = Field(None, description="当前规划线程的压缩摘要（checkpoint丢失或重建时使用）")
     session_context: dict | None = Field(None, description="增量模式时传入的当前Session状态")
     llm_config: LlmConfig | None = Field(None, description="LLM连接配置（由Java从DB读取后传入）")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表（按优先级排序）")
     mcp_endpoint: str | None = Field(None, description="MCP Server的JSON-RPC端点地址")
     token_quota: int | None = Field(None, description="本次调用的Token预算上限（可选）")
     qa_history: list[dict] | None = Field(
@@ -69,7 +84,7 @@ async def parse_intent(request: IntentParseRequest, req: Request):
     Java调用此接口，传入llm_config和mcp_endpoint。
     """
     agent_service = AgentService(
-        llm_config=request.llm_config.model_dump() if request.llm_config else None,
+        llm_configs=_build_config_list(request.llm_config, request.llm_config_fallbacks),
         mcp_base_url=request.mcp_endpoint,
         checkpointer=req.app.state.checkpointer,
     )
@@ -90,6 +105,7 @@ async def parse_intent(request: IntentParseRequest, req: Request):
 class InterpretRequest(BaseModel):
     block_chain: list[dict] = Field(..., description="待解读的积木链")
     llm_config: LlmConfig | None = Field(None, description="LLM连接配置")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
     token_quota: int | None = Field(None, description="方案解读阶段的Token预算上限（可选）")
     user_id: str | None = Field(None, description="用户ID，用于记忆蒸馏（可选）")
     session_id: str | None = Field(None, description="会话ID，用于记忆蒸馏（可选）")
@@ -110,7 +126,7 @@ async def interpret_block_chain(request: InterpretRequest):
     将 block chain 解读为用户友好的 Markdown 方案报告（非流式，保留兼容）。
     """
     service = InterpretService(
-        llm_config=request.llm_config.model_dump() if request.llm_config else None,
+        llm_configs=_build_config_list(request.llm_config, request.llm_config_fallbacks),
         token_quota=request.token_quota,
     )
     return await service.interpret(request.block_chain)
@@ -123,7 +139,7 @@ async def interpret_block_chain_stream(request: InterpretRequest, req: Request):
     解读完成后，若提供了 user_id 和 session_id，会触发蒸馏 Agent 提取记忆。
     """
     service = InterpretService(
-        llm_config=request.llm_config.model_dump() if request.llm_config else None,
+        llm_configs=_build_config_list(request.llm_config, request.llm_config_fallbacks),
         token_quota=request.token_quota,
     )
 
@@ -153,6 +169,19 @@ async def interpret_block_chain_stream(request: InterpretRequest, req: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+async def _read_checkpoint_state(checkpointer, thread_id: str):
+    """从 checkpoint 读取 AgentState，使用最小合法图（LangGraph 要求至少有一个 START 边）。"""
+    from langgraph.graph import StateGraph, START, END
+    from app.agents.main_agent import AgentState
+
+    graph = StateGraph(AgentState)
+    graph.add_node("_noop", lambda s: s)
+    graph.add_edge(START, "_noop")
+    graph.add_edge("_noop", END)
+    compiled = graph.compile(checkpointer=checkpointer)
+    return await compiled.aget_state({"configurable": {"thread_id": thread_id}})
+
+
 async def _save_interpretation_snapshot(
     interpretation: str,
     block_chain: list[dict],
@@ -166,13 +195,7 @@ async def _save_interpretation_snapshot(
     蒸馏已改为 Java 调用 /intent/distillation 端点独立触发。
     """
     try:
-        from langgraph.graph import StateGraph
-        from app.agents.main_agent import AgentState
-
-        graph = StateGraph(AgentState)
-        graph_instance = graph.compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": agent_thread_id}}
-        state = await graph_instance.aget_state(config)
+        state = await _read_checkpoint_state(checkpointer, agent_thread_id)
 
         if not state or not state.values:
             logger.warning("Snapshot skipped: checkpoint not found userId=%s thread=%s", user_id, agent_thread_id)
@@ -282,6 +305,8 @@ class DistillationRequest(BaseModel):
     session_id: str = Field(..., description="会话ID")
     agent_thread_id: str = Field(..., description="规划Agent checkpoint 线程ID")
     block_chain: list[dict] | None = Field(None, description="积木链（追加到对话上下文，可选）")
+    llm_config: LlmConfig | None = Field(None, description="LLM连接配置")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
 
 
 @router.post("/distillation", status_code=202)
@@ -293,13 +318,7 @@ async def trigger_distillation(request: DistillationRequest, req: Request):
     """
     async def _run():
         try:
-            from langgraph.graph import StateGraph
-            from app.agents.main_agent import AgentState
-
-            graph = StateGraph(AgentState)
-            graph_instance = graph.compile(checkpointer=req.app.state.checkpointer)
-            config = {"configurable": {"thread_id": request.agent_thread_id}}
-            state = await graph_instance.aget_state(config)
+            state = await _read_checkpoint_state(req.app.state.checkpointer, request.agent_thread_id)
             if not state or not state.values:
                 logger.warning("Distillation skipped: checkpoint not found thread=%s", request.agent_thread_id)
                 return
@@ -310,7 +329,8 @@ async def trigger_distillation(request: DistillationRequest, req: Request):
                     content=f"积木链已提交执行（{len(request.block_chain)} 个积木块）"
                 ))
 
-            llm = create_chat_llm(temperature=0.2, max_tokens=2000)
+            configs = _build_config_list(request.llm_config, request.llm_config_fallbacks)
+            llm = create_chat_llm_with_fallbacks(configs, temperature=0.2, max_tokens=2000) if configs else create_chat_llm(None)
             memory_client = MemoryClient(user_id=request.user_id, agent_type="distillation")
             await distill(
                 messages=messages,
@@ -333,6 +353,7 @@ async def trigger_distillation(request: DistillationRequest, req: Request):
 class AuditRequest(BaseModel):
     block_chain: list[dict] = Field(..., description="待审计的积木链")
     llm_config: LlmConfig | None = Field(None, description="LLM连接配置")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
 
 
 @router.post("/audit")
@@ -342,11 +363,8 @@ async def audit_block_chain(request: AuditRequest):
     返回 pass/fail + score + issues + suggestions。
     pass=false 时建议让用户决定是否继续执行。
     """
-    llm = create_chat_llm(
-        request.llm_config.model_dump() if request.llm_config else None,
-        temperature=0.1,
-        max_tokens=800,
-    )
+    configs = _build_config_list(request.llm_config, request.llm_config_fallbacks)
+    llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=800)
     result = await audit_chain(request.block_chain, llm)
     return result
 
@@ -355,6 +373,7 @@ class CompetitorRequest(BaseModel):
     selected_products: list[dict] = Field(..., description="执行结果商品列表")
     selection_plan: dict | None = Field(None, description="选品规划参数（可选）")
     llm_config: LlmConfig | None = Field(None, description="LLM连接配置")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
 
 
 @router.post("/competitor-stream")
@@ -362,11 +381,8 @@ async def competitor_stream(request: CompetitorRequest):
     """
     竞品洞察流式端点：分析选品结果的竞争格局，逐 token 返回 SSE 事件。
     """
-    llm = create_chat_llm(
-        request.llm_config.model_dump() if request.llm_config else None,
-        temperature=0.4,
-        max_tokens=1200,
-    )
+    configs = _build_config_list(request.llm_config, request.llm_config_fallbacks)
+    llm = create_chat_llm_with_fallbacks(configs, temperature=0.4, max_tokens=1200)
 
     async def event_generator():
         try:
@@ -377,4 +393,34 @@ async def competitor_stream(request: CompetitorRequest):
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ─── LLM 配置测试端点 ────────────────────────────────────────────────────────
+
+
+class TestLlmRequest(BaseModel):
+    llm_config: LlmConfig = Field(..., description="要测试的LLM配置")
+
+
+class TestLlmResponse(BaseModel):
+    success: bool
+    latency_ms: int = 0
+    model: str = ""
+    message: str = ""
+
+
+@router.post("/test-llm", response_model=TestLlmResponse)
+async def test_llm(request: TestLlmRequest):
+    """测试单个LLM配置是否可用：发送最小请求，返回成功/失败 + 延迟。"""
+    cfg = request.llm_config.model_dump()
+    model = cfg.get("model", "")
+    start = time.monotonic()
+    try:
+        llm = create_chat_llm(cfg, temperature=0, max_tokens=10)
+        await llm.ainvoke([HumanMessage(content="hi")])
+        latency = int((time.monotonic() - start) * 1000)
+        return TestLlmResponse(success=True, latency_ms=latency, model=model, message="OK")
+    except Exception as e:
+        latency = int((time.monotonic() - start) * 1000)
+        return TestLlmResponse(success=False, latency_ms=latency, model=model, message=str(e))
 

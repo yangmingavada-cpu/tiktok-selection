@@ -84,6 +84,32 @@ public class LlmConfigService {
     }
 
     /**
+     * 按ID获取LLM配置实体（内部使用，含加密字段）
+     */
+    public LlmConfig getById(String id) {
+        LlmConfig config = llmConfigMapper.selectById(id);
+        if (config == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "LLM配置不存在");
+        }
+        return config;
+    }
+
+    /**
+     * 获取所有激活的LLM配置Map列表（按优先级排序），用于 fallback 机制。
+     * 返回解密后的配置Map列表，供Python端按顺序尝试。
+     */
+    public List<Map<String, Object>> getActiveLlmConfigMaps() {
+        List<LlmConfig> configs = llmConfigMapper.selectList(
+                new LambdaQueryWrapper<LlmConfig>()
+                        .eq(LlmConfig::getActive, true)
+                        .orderByAsc(LlmConfig::getPriority));
+        if (configs.isEmpty()) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "未找到激活的LLM配置，请在管理后台添加LLM配置");
+        }
+        return configs.stream().map(this::toLlmConfigMap).toList();
+    }
+
+    /**
      * 查询所有LLM配置（返回原始实体，内部使用）
      */
     public List<LlmConfig> listAll() {

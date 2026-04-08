@@ -14,7 +14,7 @@ from langgraph.graph.message import add_messages
 
 from app.agents.compact_agent import compact_history
 from app.agents.distillation_agent import distill
-from app.services.llm_factory import create_chat_llm
+from app.services.llm_factory import create_chat_llm, create_chat_llm_with_fallbacks
 from app.services.memory_client import MemoryClient
 from app.services.mcp_client import MCPClient
 
@@ -226,16 +226,17 @@ class AgentService:
 
     def __init__(
         self,
-        llm_config: dict | None = None,
+        llm_configs: list[dict] | None = None,
         mcp_base_url: str | None = None,
         checkpointer=None,
     ):
-        self._llm = create_chat_llm(llm_config, temperature=0.2)
+        configs = llm_configs or []
+        self._llm = create_chat_llm_with_fallbacks(configs, temperature=0.2)
         self._mcp_base_url = mcp_base_url
         self._checkpointer = checkpointer
         # 蒸馏 Agent 使用低温度保证结构化输出稳定（与主 Agent 共用同一 LLM 配置）
-        self._distill_llm = create_chat_llm(llm_config, temperature=0.1)
-        self._compact_llm = create_chat_llm(llm_config, temperature=0.1, max_tokens=1200)
+        self._distill_llm = create_chat_llm_with_fallbacks(configs, temperature=0.1)
+        self._compact_llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=1200)
 
     # ------------------------------------------------------------------
     # 图节点（静态方法，复杂度独立核算）
@@ -862,7 +863,6 @@ class AgentService:
             "memory_updated_at_map": {},
         }
 
-    @staticmethod
     _MEMORY_FILTER_SYSTEM_PROMPT = """你是记忆相关性筛选器。根据用户当前问题，从记忆索引中选出最相关的条目。
 
 筛选原则：
@@ -1298,7 +1298,7 @@ class AgentService:
                 # 加载记忆（common + session）
                 raw_index: list[dict] = []
                 if memory_client:
-                    raw_index = await memory_client.list_index(session_id=session_id)
+                    raw_index = await memory_client.list_index(session_id=current_thread_id)
                 # 提取当前可用工具名称用于记忆召回的工具感知
                 existing_tools = existing.values.get("openai_tools") or []
                 active_tools = [t.get("function", {}).get("name", "") for t in existing_tools if t.get("function")]
@@ -1365,7 +1365,7 @@ class AgentService:
                 # 路径2/3：新会话——并行执行 MCP 初始化 + common 记忆加载，消除串行等待
                 raw_index: list[dict] = []
                 if memory_client:
-                    memory_session_id = session_id if qa_history else None
+                    memory_session_id = current_thread_id if qa_history else None
                     raw_index, _ = await asyncio.gather(
                         memory_client.list_index(session_id=memory_session_id),
                         mcp_client.initialize(session_id, session_context),

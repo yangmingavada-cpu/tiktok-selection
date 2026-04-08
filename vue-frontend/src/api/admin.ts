@@ -116,3 +116,7 @@ export function updateLlmConfig(id: string, data: Partial<LlmConfigForm>) {
 export function deleteLlmConfig(id: string) {
   return request.delete(`/admin/llm-config/${id}`)
 }
+
+export function testLlmConfig(id: string) {
+  return request.post<unknown, ApiResponse<{ success: boolean; latency_ms: number; model: string; message: string }>>(`/admin/llm-config/${id}/test`)
+}

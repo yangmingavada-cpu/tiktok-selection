@@ -5,8 +5,6 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.config import settings
-
 logger = logging.getLogger(__name__)
 
 _PERSONA_PROMPTS: dict[str, str] = {
@@ -28,17 +26,20 @@ _DEFAULT_PERSONA = "cross_border_analyst"
 
 class LLMClient:
     """
-    OpenAI兼容的LLM客户端。
-    每次请求独立配置（base_url/api_key/model），Java每次调用时传入激活的LLM配置。
+    OpenAI兼容的LLM客户端，支持多配置 fallback。
+    configs[0] 为主配置，其余为备选；主模型失败时自动切换下一个。
     """
 
-    def __init__(self, config: dict | None = None):
-        cfg = config or {}
-        base_url = cfg.get("base_url") or settings.llm_base_url
-        api_key = cfg.get("api_key") or settings.llm_api_key
-        self._model = cfg.get("model") or settings.llm_model
+    def __init__(self, configs: list[dict]):
+        if not configs:
+            raise ValueError("至少需要一个 LLM 配置")
+        self._configs = configs
+        self._init_client(configs[0])
+
+    def _init_client(self, cfg: dict):
+        self._model = cfg["model"]
         self._max_tokens = int(cfg.get("max_tokens") or 4096)
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._client = AsyncOpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
 
     async def chat(
         self,
@@ -46,7 +47,26 @@ class LLMClient:
         tools: list[dict] | None = None,
         temperature: float = 0.2,
     ) -> dict:
-        """发送Chat Completion请求，返回统一格式的响应字典。"""
+        """发送Chat Completion请求，支持多配置 fallback。"""
+        last_error: Exception | None = None
+        for i, cfg in enumerate(self._configs):
+            if i > 0:
+                logger.warning("LLMClient fallback → config #%d model=%s", i, cfg.get("model"))
+                self._init_client(cfg)
+            try:
+                return await self._do_chat(messages, tools, temperature)
+            except Exception as e:
+                logger.warning("LLMClient config #%d model=%s 失败: %s", i, cfg.get("model"), e)
+                last_error = e
+        raise last_error  # type: ignore[misc]
+
+    async def _do_chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+        temperature: float,
+    ) -> dict:
+        """实际执行单次 Chat Completion 请求。"""
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
