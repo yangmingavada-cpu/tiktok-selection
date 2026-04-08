@@ -82,25 +82,34 @@ class MemoryClient:
         description: str,
         content: str,
         session_id: str | None = None,
+        phase: str | None = None,
+        block_chain_hash: str | None = None,
     ) -> str | None:
         """
         写入一条记忆。
         scope: "common"（跨会话）| "session"（本次会话）
         memory_type: user / feedback / project / reference
+        phase: "规划" | "执行" | None
+        block_chain_hash: 积木链哈希前6位，标识轮次
         返回: 写入的相对路径（失败返回 None）
         """
         try:
+            body: dict = {
+                "sessionId": session_id,
+                "scope": scope,
+                "memoryType": memory_type,
+                "name": name,
+                "description": description,
+                "content": content,
+                "agentType": self._agent_type,
+            }
+            if phase:
+                body["phase"] = phase
+            if block_chain_hash:
+                body["blockChainHash"] = block_chain_hash
             resp = await self._client.post(
                 f"{self._base_url}/{self._user_id}/write",
-                json={
-                    "sessionId": session_id,
-                    "scope": scope,
-                    "memoryType": memory_type,
-                    "name": name,
-                    "description": description,
-                    "content": content,
-                    "agentType": self._agent_type,
-                },
+                json=body,
             )
             resp.raise_for_status()
             return resp.json().get("data")

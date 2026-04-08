@@ -18,6 +18,7 @@ from app.agents.audit_agent import audit_chain
 from app.agents.competitor_agent import analyze_competitors
 from app.services.memory_client import MemoryClient
 from app.services.llm_factory import create_chat_llm, create_chat_llm_with_fallbacks
+from app.agents.memory_agent import MemoryAgent
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -83,10 +84,23 @@ async def parse_intent(request: IntentParseRequest, req: Request):
     会话状态通过 Redis checkpoint 持久化，多轮对话自动续接。
     Java调用此接口，传入llm_config和mcp_endpoint。
     """
+    configs = _build_config_list(request.llm_config, request.llm_config_fallbacks)
+
+    # 创建 Memory Agent（独立子 Agent，管理记忆读写检索）
+    memory_agent = None
+    if request.user_id:
+        memory_agent = MemoryAgent(
+            memory_client=MemoryClient(user_id=request.user_id, agent_type="memory"),
+            llm=create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=500),
+            agent_thread_id=request.agent_thread_id or request.session_id,
+            user_id=request.user_id,
+        )
+
     agent_service = AgentService(
-        llm_configs=_build_config_list(request.llm_config, request.llm_config_fallbacks),
+        llm_configs=configs,
         mcp_base_url=request.mcp_endpoint,
         checkpointer=req.app.state.checkpointer,
+        memory_agent=memory_agent,
     )
 
     result = await agent_service.parse_intent(

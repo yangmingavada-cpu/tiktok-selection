@@ -15,7 +15,8 @@ from langgraph.graph.message import add_messages
 from app.agents.compact_agent import compact_history
 from app.agents.distillation_agent import distill
 from app.services.llm_factory import create_chat_llm, create_chat_llm_with_fallbacks
-from app.services.memory_client import MemoryClient
+# MemoryClient 不再直接使用，由 MemoryAgent 封装
+# from app.services.memory_client import MemoryClient
 from app.services.mcp_client import MCPClient
 
 logger = logging.getLogger(__name__)
@@ -130,36 +131,34 @@ _RESOURCE_TOOL: dict = {
 }
 
 
-# 合成工具：读取历史记忆文件完整内容（仅在 user_id 存在时注入工具列表）
-_READ_MEMORY_TOOL: dict = {
+# 合成工具：通过 Memory Agent 检索记忆（替代原来的 read_memory）
+_QUERY_MEMORY_TOOL: dict = {
     "type": "function",
     "function": {
-        "name": "read_memory",
-        "description": "读取指定记忆文件的完整内容，获取用户历史偏好或本次会话上下文。\n"
-                       "索引已在系统提示中列出，按需选择最相关的文件读取。",
+        "name": "query_memory",
+        "description": "用自然语言检索记忆系统，获取历史数据、用户偏好或之前的执行结果。\n"
+                       "例如：'上次达人数据有哪些' '用户的市场偏好' '第一步执行结果'",
         "parameters": {
             "type": "object",
             "properties": {
-                "file_paths": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "要读取的记忆文件路径列表（来自系统提示中的 Memory Index）",
+                "question": {
+                    "type": "string",
+                    "description": "要检索的问题（自然语言）",
                 }
             },
-            "required": ["file_paths"],
+            "required": ["question"],
         },
     },
 }
 
-# 合成工具：主动写入值得跨会话保留的记忆（主动写入路径）
-_WRITE_MEMORY_TOOL: dict = {
+# 合成工具：通过 Memory Agent 写入记忆（替代原来的 write_memory）
+_SAVE_MEMORY_TOOL: dict = {
     "type": "function",
     "function": {
-        "name": "write_memory",
-        "description": "将当前对话中值得跨会话保留的信息写入记忆。\n"
+        "name": "save_memory",
+        "description": "将值得保留的信息写入记忆系统。\n"
                        "仅在以下情况调用：①用户明确纠正AI行为 ②用户表达了明确市场/品类偏好 "
-                       "③finalize_chain完成后记录本次链路核心参数。\n"
-                       "scope=common 为永久记忆，session 为本次会话记录。",
+                       "③finalize_chain完成后记录本次链路核心参数。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -173,7 +172,7 @@ _WRITE_MEMORY_TOOL: dict = {
                     "enum": ["user", "feedback", "project", "reference"],
                 },
                 "name":        {"type": "string", "description": "记忆名称（10字以内）"},
-                "description": {"type": "string", "description": "一句话摘要，用于未来相关性筛选"},
+                "description": {"type": "string", "description": "一句话摘要"},
                 "content":     {"type": "string", "description": "记忆正文（Markdown格式）"},
             },
             "required": ["scope", "memory_type", "name", "description", "content"],
@@ -229,11 +228,13 @@ class AgentService:
         llm_configs: list[dict] | None = None,
         mcp_base_url: str | None = None,
         checkpointer=None,
+        memory_agent=None,
     ):
         configs = llm_configs or []
         self._llm = create_chat_llm_with_fallbacks(configs, temperature=0.2)
         self._mcp_base_url = mcp_base_url
         self._checkpointer = checkpointer
+        self._memory_agent = memory_agent
         # 蒸馏 Agent 使用低温度保证结构化输出稳定（与主 Agent 共用同一 LLM 配置）
         self._distill_llm = create_chat_llm_with_fallbacks(configs, temperature=0.1)
         self._compact_llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=1200)
@@ -248,10 +249,10 @@ class AgentService:
         mcp_tools = await mcp_client.list_tools(session_id=state["session_id"])
         openai_tools = mcp_client.mcp_tools_to_openai_functions(mcp_tools)
         openai_tools.append(_RESOURCE_TOOL)
-        # 记忆工具仅在 user_id 存在时注入（无用户上下文时禁用，为多 Agent 扩展保留独立注入点）
+        # 记忆工具仅在 user_id 存在时注入（通过 Memory Agent 代理）
         if state.get("user_id"):
-            openai_tools.append(_READ_MEMORY_TOOL)
-            openai_tools.append(_WRITE_MEMORY_TOOL)
+            openai_tools.append(_QUERY_MEMORY_TOOL)
+            openai_tools.append(_SAVE_MEMORY_TOOL)
         logger.info(
             "Fetched tools session=%s mcp_tools=%d openai_tools=%d",
             state["session_id"],
@@ -490,7 +491,7 @@ class AgentService:
         tc: dict,
         session_id: str,
         mcp_client: MCPClient,
-        memory_client: MemoryClient | None = None,
+        memory_agent=None,
         user_id: str | None = None,
         state: dict | None = None,
     ) -> dict:
@@ -509,44 +510,27 @@ class AgentService:
                     else {"success": False, "error": "Resource returned no contents"}
                 )
 
-            if func_name == "read_memory":
-                if not memory_client:
+            if func_name == "query_memory":
+                if not memory_agent:
                     return {"success": False, "error": "记忆系统未初始化（user_id 未传入）"}
-                file_paths = func_args.get("file_paths", [])
-                files = await memory_client.read_files(file_paths)
-                updated_at_map = (state or {}).get("memory_updated_at_map") or {}
-                parts = []
-                for path, c in files.items():
-                    header = f"## {path}"
-                    freshness = AgentService._freshness_hint_for_content(updated_at_map.get(path))
-                    if freshness:
-                        header += f"\n<system-reminder>{freshness}</system-reminder>"
-                    parts.append(f"{header}\n{AgentService._microcompact_text(c, MEMORY_FILE_EXCERPT_CHARS)}")
-                content = "\n\n---\n\n".join(parts)
-                return {
-                    "success": True,
-                    "content": content or "（无内容）",
-                    "_surfaced_memory_paths": list(files.keys()),
-                }
+                question = func_args.get("question", "")
+                content = await memory_agent.query(question)
+                return {"success": True, "content": content}
 
-            if func_name == "write_memory":
-                if not memory_client:
+            if func_name == "save_memory":
+                if not memory_agent:
                     return {"success": False, "error": "记忆系统未初始化（user_id 未传入）"}
-                scope = func_args.get("scope", "session")
-                await memory_client.write_memory(
-                    scope=scope,
-                    memory_type=func_args.get("memory_type", "project"),
+                result = await memory_agent.save(
                     name=func_args.get("name", ""),
                     description=func_args.get("description", ""),
                     content=func_args.get("content", ""),
-                    session_id=None if scope == "common" else session_id,
+                    memory_type=func_args.get("memory_type", "project"),
+                    scope=func_args.get("scope", "session"),
                 )
-                name = func_args.get("name", "")
-                # 通过 obs 传递已写名称，_tool_node 收集后更新 written_memory_names
                 return {
                     "success": True,
-                    "message": f"记忆已写入: {name}",
-                    "_written_memory_name": name,
+                    "message": result,
+                    "_written_memory_name": func_args.get("name", ""),
                 }
 
             return await mcp_client.call_tool(
@@ -644,7 +628,7 @@ class AgentService:
         state: AgentState,
         *,
         mcp_client: MCPClient,
-        memory_client: MemoryClient | None = None,
+        memory_agent=None,
     ) -> dict:
         """Observe：顺序执行所有工具调用，收集观测结果，提取 chain_length 和 hint。"""
         last: AIMessage = state["messages"][-1]
@@ -656,21 +640,38 @@ class AgentService:
         action = None
         new_hints: list[str] = []
         new_written_names: list[str] = []
-        new_surfaced_paths: list[str] = []
         latest_snapshot: dict | None = None
         chain_length = state.get("chain_length", 0)
 
         for tc in last.tool_calls:
             obs = await AgentService._execute_tool_call(
-                tc, session_id, mcp_client, memory_client, user_id, state=state,
+                tc, session_id, mcp_client, memory_agent, user_id, state=state,
             )
             # 收集主动写入的记忆名称（蒸馏互斥用）
             written_name = obs.pop("_written_memory_name", None)
             if written_name:
                 new_written_names.append(written_name)
-            surfaced_paths = obs.pop("_surfaced_memory_paths", None)
-            if surfaced_paths:
-                new_surfaced_paths.extend(p for p in surfaced_paths if p)
+
+            # 自动将 MCP 工具调用结果保存到记忆（排除记忆工具自身和非数据工具）
+            func_name = tc.get("name", "")
+            if memory_agent and func_name not in (
+                "read_resource", "query_memory", "save_memory", "ask_user", "create_plan",
+            ):
+                try:
+                    from app.agents.memory_agent import compute_chain_hash
+                    chain_hash = compute_chain_hash(
+                        state.get("chain_snapshot", {}).get("blockChain")
+                        if state.get("chain_snapshot") else None
+                    )
+                    await memory_agent.save_tool_result(
+                        phase="规划",
+                        block_chain_hash=chain_hash,
+                        tool_name=func_name,
+                        tool_args=tc.get("args", {}),
+                        tool_result=obs,
+                    )
+                except Exception as e:
+                    logger.warning("Auto-save tool result failed tool=%s: %s", func_name, e)
 
             compact_obs = AgentService._compact_tool_observation(obs)
             tool_messages.append(ToolMessage(
@@ -701,8 +702,7 @@ class AgentService:
             update["ambiguities"] = new_hints
         if new_written_names:
             update["written_memory_names"] = new_written_names
-        if new_surfaced_paths:
-            update["surfaced_memory_paths"] = list(dict.fromkeys(new_surfaced_paths))
+        # surfaced_memory_paths 已移入 MemoryAgent 内部管理
         if latest_snapshot:
             update["chain_snapshot"] = latest_snapshot
         return update
@@ -758,12 +758,12 @@ class AgentService:
 
         return last_state, timed_out
 
-    def _build_graph(self, mcp_client: MCPClient, memory_client: MemoryClient | None = None):
+    def _build_graph(self, mcp_client: MCPClient):
         graph = StateGraph(AgentState)
         graph.add_node("fetch_tools", partial(self._fetch_tools_node, mcp_client=mcp_client))
         graph.add_node("call_llm",    partial(self._llm_node,         llm=self._llm, mcp_client=mcp_client))
         graph.add_node("call_tools",  partial(self._tool_node,        mcp_client=mcp_client,
-                                                                       memory_client=memory_client))
+                                                                       memory_agent=self._memory_agent))
 
         graph.add_edge(START, "fetch_tools")
         graph.add_edge("fetch_tools", "call_llm")
@@ -1262,7 +1262,7 @@ class AgentService:
         current_thread_id = agent_thread_id or session_id
         config = {"configurable": {"thread_id": current_thread_id}}
         mcp_client     = MCPClient(mcp_base_url=self._mcp_base_url)
-        memory_client  = MemoryClient(user_id=user_id, agent_type="main") if user_id else None
+        # 记忆系统由 MemoryAgent 管理，不再在 parse_intent 中直接操作 MemoryClient
 
         try:
             # 仅全新会话（无 agent_thread_id）才运行预检。
@@ -1284,7 +1284,7 @@ class AgentService:
                         "conversation_summary": conversation_summary,
                     }
 
-            graph = self._build_graph(mcp_client, memory_client)
+            graph = self._build_graph(mcp_client)
             existing = await graph.aget_state(config)
             is_new_session = not existing.values.get("messages")
 
@@ -1295,25 +1295,9 @@ class AgentService:
                 await mcp_client.initialize(session_id, restore_context)
                 logger.info("Resuming checkpoint session=%s thread=%s", session_id, current_thread_id)
 
-                # 加载记忆（common + session）
-                raw_index: list[dict] = []
-                if memory_client:
-                    raw_index = await memory_client.list_index(session_id=current_thread_id)
-                # 提取当前可用工具名称用于记忆召回的工具感知
-                existing_tools = existing.values.get("openai_tools") or []
-                active_tools = [t.get("function", {}).get("name", "") for t in existing_tools if t.get("function")]
-                memory_index = await self._filter_relevant_memories(
-                    user_text,
-                    raw_index[:MEMORY_INDEX_SCAN_LIMIT],
-                    self._compact_llm,
-                    surfaced_paths=existing.values.get("surfaced_memory_paths") or [],
-                    active_tool_names=active_tools or None,
-                ) if raw_index else []
-                # 构建 filePath→updatedAt 映射，用于 read_memory 时注入新鲜度警告
-                mem_updated_map = {e.get("filePath", ""): e.get("updatedAt", "") for e in raw_index if e.get("filePath")}
+                # 记忆加载/筛选/注入已委托给 MemoryAgent，主 Agent 通过 query_memory 工具按需检索
 
                 if self._should_compact_state(existing.values):
-                    # 需要压缩时，重建状态并注入记忆
                     current_thread_id, compact_result = await self._build_compacted_state(
                         state_values=existing.values,
                         session_id=session_id,
@@ -1323,85 +1307,47 @@ class AgentService:
                         session_context=restore_context,
                         qa_history=qa_history,
                         token_quota=token_quota,
-                        memory_index=memory_index,
+                        memory_index=[],
                     )
                     if "messages" in compact_result:
-                        # 压缩成功：使用全新压缩状态，注入记忆新鲜度映射
-                        compact_result["memory_updated_at_map"] = mem_updated_map
                         initial_state = compact_result
                     else:
-                        # 压缩失败：回退到追加模式，仅更新 compact_failures
-                        messages_to_add = [HumanMessage(content=user_text)]
-                        if memory_index:
-                            memory_prompt = self._build_memory_index_message(memory_index)
-                            messages_to_add.insert(0, SystemMessage(content=memory_prompt))
                         initial_state = {
-                            "messages": messages_to_add,
+                            "messages": [HumanMessage(content=user_text)],
                             "done": False, "result": None, "action": None,
                             "iterations": 0, "total_tokens": 0,
                             "prompt_tokens": 0, "completion_tokens": 0,
                             "token_quota": token_quota,
-                            "memory_updated_at_map": mem_updated_map,
-                            **compact_result,  # 含 compact_failures
+                            **compact_result,
                         }
                     config = {"configurable": {"thread_id": current_thread_id}}
                 else:
-                    # 不需要压缩时，只追加新消息，但如果有相关记忆，也注入系统提示
-                    messages_to_add = [HumanMessage(content=user_text)]
-                    if memory_index:
-                        # 注入记忆索引到系统消息（放在用户消息之前）
-                        memory_prompt = self._build_memory_index_message(memory_index)
-                        messages_to_add.insert(0, SystemMessage(content=memory_prompt))
-
                     initial_state = {
-                        "messages": messages_to_add,
+                        "messages": [HumanMessage(content=user_text)],
                         "done": False, "result": None, "action": None,
                         "iterations": 0, "total_tokens": 0,
                         "prompt_tokens": 0, "completion_tokens": 0,
                         "token_quota": token_quota,
-                        "memory_updated_at_map": mem_updated_map,
                     }
             else:
-                # 路径2/3：新会话——并行执行 MCP 初始化 + common 记忆加载，消除串行等待
-                raw_index: list[dict] = []
-                if memory_client:
-                    memory_session_id = current_thread_id if qa_history else None
-                    raw_index, _ = await asyncio.gather(
-                        memory_client.list_index(session_id=memory_session_id),
-                        mcp_client.initialize(session_id, session_context),
-                    )
-                else:
-                    raw_index = []
-                    await mcp_client.initialize(session_id, session_context)
-                memory_index = await self._filter_relevant_memories(
-                    user_text,
-                    raw_index[:MEMORY_INDEX_SCAN_LIMIT],
-                    self._compact_llm,
-                ) if raw_index else []
-                mem_updated_map = {e.get("filePath", ""): e.get("updatedAt", "") for e in raw_index if e.get("filePath")}
+                # 路径2/3：新会话——MCP 初始化（记忆加载已委托给 MemoryAgent）
+                await mcp_client.initialize(session_id, session_context)
+
                 if qa_history:
-                    # 路径2：checkpoint 丢失，从 Java 历史记录降级恢复
                     logger.warning("Checkpoint missing session=%s, recovering from qa_history len=%d",
                                    session_id, len(qa_history))
                     msgs = self._build_initial_messages(
-                        user_text,
-                        session_context,
-                        qa_history,
-                        memory_index,
+                        user_text, session_context, qa_history,
                         conversation_summary=conversation_summary,
                     )
                 else:
-                    # 路径3：全新会话
                     msgs = self._build_initial_messages(
-                        user_text,
-                        session_context,
-                        memory_index=memory_index,
+                        user_text, session_context,
                         conversation_summary=conversation_summary,
                     )
                 initial_state = {**self._base_state_fields(session_id, user_id, token_quota),
                                  "messages": msgs,
-                                 "compact_summary": conversation_summary,
-                                 "memory_updated_at_map": mem_updated_map}
+                                 "compact_summary": conversation_summary}
 
             last_state, timed_out = await self._run_graph(graph, initial_state, config, session_id)
 
@@ -1419,5 +1365,5 @@ class AgentService:
             return {"success": False, "message": str(e), "llm_tokens_used": 0, "iterations": 0}
         finally:
             await mcp_client.close()
-            if memory_client:
-                await memory_client.close()
+            if self._memory_agent:
+                await self._memory_agent.close()

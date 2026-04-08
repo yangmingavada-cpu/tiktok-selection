@@ -88,7 +88,9 @@ public class MemoryFileController {
                 request.name(),
                 request.description(),
                 request.content(),
-                request.agentType() != null ? request.agentType() : "main"
+                request.agentType() != null ? request.agentType() : "main",
+                request.phase(),
+                request.blockChainHash()
         );
         return R.ok(filePath);
     }
@@ -115,6 +117,8 @@ public class MemoryFileController {
             String name,
             String description,
             String content,
-            String agentType
+            String agentType,
+            String phase,
+            String blockChainHash
     ) {}
 }
