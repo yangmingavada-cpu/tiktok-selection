@@ -1037,7 +1037,10 @@ function openExecutionStream(sessionId: string) {
         const s = resultSession.value
         if (!s) return
         const last = s.steps[s.steps.length - 1]
-        if (last?.status === 'running') last.status = 'done'
+        if (last?.status === 'running') {
+          last.status = 'done'
+          last.outputCount = d.rowCount ?? d.rows?.length ?? undefined
+        }
         if (Array.isArray(d.rows)) {
           s.rows = d.rows
           s.dims = d.dims || []

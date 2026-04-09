@@ -46,7 +46,7 @@ export interface ExecSession {
   dataState: 'pending' | 'ready' | 'empty'
   syncState: 'idle' | 'syncing'
   lastSyncedAt: number | null
-  steps: { label: string; status: 'done' | 'running' | 'fail' }[]
+  steps: { label: string; status: 'done' | 'running' | 'fail'; outputCount?: number }[]
   rows: Record<string, unknown>[]
   dims: { id: string; label: string; type: string }[]
   totalRows: number

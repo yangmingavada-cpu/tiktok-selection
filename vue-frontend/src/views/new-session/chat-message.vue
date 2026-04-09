@@ -126,6 +126,10 @@ function isPreviewEmpty(preview: ChatMessage['preview']): boolean {
             >
               <span class="exec-step-icon">{{ step.status === 'done' ? '✓' : step.status === 'fail' ? '✗' : '⟳' }}</span>
               {{ step.label }}
+              <span v-if="step.status === 'done' && step.outputCount != null"
+                    class="exec-step-count" :class="{ zero: step.outputCount === 0 }">
+                {{ step.outputCount.toLocaleString() }} 条
+              </span>
             </div>
           </div>
 
@@ -327,6 +331,8 @@ function isPreviewEmpty(preview: ChatMessage['preview']): boolean {
 .exec-step.fail { color: #dc2626; }
 .exec-step.running { color: #6366f1; }
 .exec-step-icon { width: 14px; text-align: center; flex-shrink: 0; }
+.exec-step-count { margin-left: auto; color: #909399; }
+.exec-step-count.zero { color: #f56c6c; font-weight: 600; }
 
 .exec-error {
   padding: 6px 14px 10px;
