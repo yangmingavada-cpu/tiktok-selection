@@ -43,7 +43,9 @@ public class AddScoringTool implements McpTool {
                                 "评分类型：numeric(必须传source_field) 或 semantic(必须传semantic_prompt)",
                                 List.of("numeric", "semantic")),
                         propReq("dimension_name", "string",
-                                "维度名称，如'销量表现'、'价格竞争力'、'创新性'，将作为字段名的一部分"),
+                                "维度中文显示名，如'利润空间'、'销量表现'、'品牌潜力'"),
+                        propReq("output_field_name", "string",
+                                "评分字段英文ID（系统自动加score_前缀），如 profit、sales_growth、brand_quality"),
                         propReq("weight", "integer", "相对权重(建议1-10)，与其他维度的weight对比决定占比"),
                         propOptDynEnum("source_field",
                                 "numeric类型时：基于哪个字段的值进行评分，必须在available_fields中",
@@ -54,7 +56,7 @@ public class AddScoringTool implements McpTool {
                         propOpt("max_score", "integer", "单维度满分值，默认100"),
                         propOpt("semantic_prompt", "string",
                                 "semantic类型时必填：描述评分标准，如'评估商品的创新性和差异化程度，满分100分，考虑产品独特性、外观设计、功能创新'")
-                ), List.of("scoring_type", "dimension_name", "weight")));
+                ), List.of("scoring_type", "dimension_name", "output_field_name", "weight")));
     }
 
     @Override
@@ -76,7 +78,11 @@ public class AddScoringTool implements McpTool {
         }
 
         int weight = weightObj instanceof Number n ? n.intValue() : 5;
-        String scoreField = "score_" + dimensionName.replaceAll("[^a-zA-Z0-9]", "_").toLowerCase();
+        String outputFieldName = (String) args.get("output_field_name");
+        if (outputFieldName == null || outputFieldName.isBlank()) {
+            outputFieldName = "dim_" + (session.getScoreFields().size() + 1);
+        }
+        String scoreField = "score_" + outputFieldName.replaceAll("[^a-zA-Z0-9_]", "").toLowerCase();
 
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("dimension_name", dimensionName);
