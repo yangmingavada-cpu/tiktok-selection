@@ -255,46 +255,58 @@ public class MemoryFileService {
         StringBuilder sb = new StringBuilder();
         sb.append("# Memory Index\n\n");
         sb.append("## 说明\n");
-        sb.append("本文件是选品会话的记忆索引，记录了本次对话中所有工具调用和执行结果。\n\n");
+        sb.append("本文件是选品会话的记忆索引，按 chainHash 分组记录了所有 API 数据。\n\n");
         sb.append("### 结构\n");
-        sb.append("- 按 **阶段** 分为「规划阶段」和「执行阶段」两个区域\n");
+        sb.append("- 按 **chainHash** 分组，每组代表一批相关的数据记录\n");
         sb.append("- 每个条目格式：`#seq [名称-chainHash](文件路径) — 描述`\n");
         sb.append("- **seq**：会话内递增序号，标识时间顺序\n");
-        sb.append("- **chainHash**：积木链内容的 MD5 前6位，标识属于哪个版本的积木链。同一个 chainHash 表示同一版本的方案\n\n");
+        sb.append("- **chainHash**：积木链内容的 MD5 前6位，标识属于哪个版本的积木链\n\n");
         sb.append("### 阶段说明\n");
-        sb.append("- **规划阶段**：AI 构建积木链时调用工具的参数和返回结果\n");
-        sb.append("- **执行阶段**：积木链实际执行后获取的真实数据（含前50条数据明细表格）\n\n");
+        sb.append("- 每个 `## chain:xxx` 分组是一批相关数据，可能包含规划预览和/或执行真实数据\n");
+        sb.append("- 每条记忆自带 phase 标签（规划/执行），从描述可判断是预览还是真实数据\n\n");
         sb.append("### 如何使用\n");
-        sb.append("- 用户询问方案逻辑 → 查看规划阶段的 finalize_chain 条目\n");
-        sb.append("- 用户询问真实数据 → 查看执行阶段的步骤条目\n");
+        sb.append("- 用户询问预览/验证数据 → 查看带「规划」标签的条目\n");
+        sb.append("- 用户询问真实执行数据 → 查看带「执行」标签的条目\n");
         sb.append("- 调用 query_memory 工具读取具体 md 文件获取完整内容\n\n");
+        sb.append("### 清理规则\n");
+        sb.append("- 索引超过 200 条时，按创建时间删除最早的整个 chainHash 分组\n");
+        sb.append("- 用户画像(common)记忆不参与清理\n\n");
         sb.append("---\n\n");
 
-        // 按 phase 分组：先规划，后执行，最后 common
-        List<UserMemoryFile> planRecords = records.stream()
-                .filter(r -> "规划".equals(r.getPhase())).toList();
-        List<UserMemoryFile> execRecords = records.stream()
-                .filter(r -> "执行".equals(r.getPhase())).toList();
-        List<UserMemoryFile> otherRecords = records.stream()
-                .filter(r -> r.getPhase() == null || (!"规划".equals(r.getPhase()) && !"执行".equals(r.getPhase()))).toList();
+        // 按 chainHash 分组，null hash 归入用户画像
+        // 收集所有不同的 chainHash（保持出现顺序）
+        List<String> chainOrder = new ArrayList<>();
+        for (UserMemoryFile r : records) {
+            String hash = r.getBlockChainHash();
+            if (hash != null && !chainOrder.contains(hash)) {
+                chainOrder.add(hash);
+            }
+        }
 
-        if (!planRecords.isEmpty()) {
-            sb.append("## 规划阶段\n");
-            for (UserMemoryFile r : planRecords) {
+        // 输出每个 chain 分组
+        for (String hash : chainOrder) {
+            List<UserMemoryFile> group = records.stream()
+                    .filter(r -> hash.equals(r.getBlockChainHash())).toList();
+            // 取该组最早的创建时间
+            String createdAt = group.stream()
+                    .map(UserMemoryFile::getCreatedAt)
+                    .filter(java.util.Objects::nonNull)
+                    .min(java.util.Comparator.naturalOrder())
+                    .map(t -> t.toLocalDate() + " " + t.toLocalTime().toString().substring(0, 5))
+                    .orElse("未知");
+            sb.append(String.format("## chain:%s（创建于 %s）%n", hash, createdAt));
+            for (UserMemoryFile r : group) {
                 sb.append(formatIndexLine(r));
             }
             sb.append("\n");
         }
-        if (!execRecords.isEmpty()) {
-            sb.append("## 执行阶段（真实数据）\n");
-            for (UserMemoryFile r : execRecords) {
-                sb.append(formatIndexLine(r));
-            }
-            sb.append("\n");
-        }
-        if (!otherRecords.isEmpty()) {
+
+        // 用户画像：chainHash 为 null 的记录
+        List<UserMemoryFile> commonRecords = records.stream()
+                .filter(r -> r.getBlockChainHash() == null).toList();
+        if (!commonRecords.isEmpty()) {
             sb.append("## 用户画像\n");
-            for (UserMemoryFile r : otherRecords) {
+            for (UserMemoryFile r : commonRecords) {
                 sb.append(formatIndexLine(r));
             }
             sb.append("\n");
