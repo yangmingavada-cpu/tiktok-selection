@@ -152,7 +152,7 @@ def build_system_prompt() -> str:
     )
     return "\n\n".join([date_hint] + _SYSTEM_PROMPT_PARTS)
 
-MAX_ITERATIONS = 15
+MAX_ITERATIONS = 30
 MAX_CHAIN_LENGTH = 30
 LLM_NODE_TIMEOUT_SECONDS = 120.0
 _INCREMENTAL_TOOLS = frozenset({"modify_block", "rollback", "create_branch"})
