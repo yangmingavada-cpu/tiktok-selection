@@ -22,11 +22,25 @@ public class VideoListFilterRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "video_id", "title", "region",
-        "influencer_id", "product_category_id", "product_id",
-        "created_by_ai", "is_ad", "sales_flag",
-        "total_digg_cnt", "total_views_cnt",
-        "create_time", "duration"
+        // 基础
+        "video_id", "unique_id", "user_id", "region",
+        "video_desc", "create_time", "duration",
+        "is_ad", "created_by_ai", "sales_flag",
+
+        // 互动（总量）
+        "total_views_cnt",
+        "total_digg_cnt",
+        "total_comments_cnt",
+        "total_favorites_cnt",
+        "total_shares_cnt",
+
+        // 互动（增量）
+        "total_views_1d_cnt", "total_views_7d_cnt", "total_views_30d_cnt",
+        "total_digg_1d_cnt", "total_digg_7d_cnt", "total_digg_30d_cnt",
+
+        // 带货
+        "total_video_sale_cnt",
+        "total_video_sale_gmv_amt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

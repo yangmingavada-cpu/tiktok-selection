@@ -22,11 +22,23 @@ public class VideoRanklistRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "video_id", "title", "region",
-        "influencer_id", "product_category_id",
-        "created_by_ai",
-        "total_views_cnt", "total_video_sale_cnt",
-        "create_time", "rank_position"
+        // 基础
+        "video_id", "unique_id", "user_id", "nick_name", "region",
+        "video_desc", "create_time", "duration",
+        "created_by_ai", "sales_flag",
+
+        // 互动（周期增量）
+        "total_views_cnt", "total_digg_cnt",
+        "total_comments_cnt", "total_favorites_cnt", "total_shares_cnt",
+
+        // 带货（周期增量）
+        "total_video_sale_cnt", "total_video_sale_gmv_amt",
+
+        // 历史总量
+        "total_views_history_cnt", "total_digg_history_cnt",
+        "total_comments_history_cnt", "total_favorites_history_cnt",
+        "total_shares_history_cnt",
+        "total_video_sale_history_cnt", "total_video_sale_gmv_history_amt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

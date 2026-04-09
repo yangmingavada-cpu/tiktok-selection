@@ -20,13 +20,15 @@ public class VideoProductTraverseRequest {
     private static final ObjectMapper MAPPER = new ObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    // 注意：API 实际返回视频数据（带 product_id），而非商品数据
+    // outputType 声明为 "product_list" 但数据结构为视频，需后续评估是否调整
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "product_id", "product_name", "region", "category_id",
-        "min_price", "max_price", "spu_avg_price",
-        "product_rating", "review_count",
-        "total_sale_7d_cnt", "total_sale_30d_cnt",
-        "total_sale_gmv_7d_amt", "total_sale_gmv_30d_amt",
-        "product_commission_rate", "seller_id"
+        "video_id", "user_id", "region",
+        "video_desc", "create_time", "duration",
+        "product_id",
+        "total_views_cnt", "total_digg_cnt",
+        "total_comments_cnt", "total_favorites_cnt", "total_shares_cnt",
+        "total_video_sale_cnt", "total_video_sale_gmv_amt"
     );
 
     @JsonAlias("pageSize")

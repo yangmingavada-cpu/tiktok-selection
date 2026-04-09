@@ -25,10 +25,9 @@ public class ProductRanklistRequest {
         "product_id", "product_name", "region",
         "category_id", "category_l2_id", "category_l3_id",
         "min_price", "max_price", "spu_avg_price",
-        "product_rating", "review_count",
         "product_commission_rate",
-        "total_sale_cnt", "total_ifl_cnt",
-        "rank_position"
+        "total_sale_cnt", "total_sale_gmv_amt",
+        "total_ifl_cnt", "total_video_cnt", "total_live_cnt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

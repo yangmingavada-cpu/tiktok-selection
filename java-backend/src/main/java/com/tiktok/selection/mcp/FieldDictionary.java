@@ -56,7 +56,7 @@ public final class FieldDictionary {
         return BLOCK_FIELD_MAP.getOrDefault(blockId, List.of());
     }
 
-    // ==================== 商品字段（55个）====================
+    // ==================== 商品字段（58个）====================
 
     public static final List<String> PRODUCT_LIST_FIELDS = List.of(
             // 基础信息
@@ -67,7 +67,7 @@ public final class FieldDictionary {
             "product_rating", "review_count",
             "product_commission_rate",
             "sales_flag", "sales_trend_flag",
-            "seller_id", "cover_url", "first_crawl_dt",
+            "seller_id", "cover_url", "first_crawl_dt", "last_crawl_dt",
             "total_ifl_cnt",
 
             // 总销量/GMV（全量）
@@ -126,10 +126,11 @@ public final class FieldDictionary {
             Map.entry("seller_id",                 "店铺ID"),
             Map.entry("cover_url",                 "商品封面图URL"),
             Map.entry("first_crawl_dt",            "首次采集时间"),
+            Map.entry("last_crawl_dt",             "最近采集时间"),
             Map.entry("total_ifl_cnt",             "总带货达人数"),
             // 总量
-            Map.entry("total_sale_cnt",            "总销量"),
-            Map.entry("total_sale_gmv_amt",        "总GMV(USD)"),
+            Map.entry("total_sale_cnt",            "总销量（榜单中为周期内销量增量）"),
+            Map.entry("total_sale_gmv_amt",        "总GMV(USD)（榜单中为周期内销售额增量）"),
             // 销量增量
             Map.entry("total_sale_1d_cnt",         "近1日销量增量"),
             Map.entry("total_sale_7d_cnt",         "近7日销量增量"),
@@ -170,7 +171,7 @@ public final class FieldDictionary {
             Map.entry("total_views_30d_cnt",       "近30日视频播放量增量")
     );
 
-    // ==================== 达人字段（40个）====================
+    // ==================== 达人字段（52个）====================
 
     public static final List<String> INFLUENCER_LIST_FIELDS = List.of(
             // 基础信息
@@ -210,7 +211,8 @@ public final class FieldDictionary {
             "total_post_video_history_cnt", "total_live_history_cnt",
             "total_sale_history_cnt", "total_sale_gmv_history_amt",
             "total_product_history_cnt",
-            "most_category_id", "product_category_list"
+            "most_category_id", "most_category_l2_id", "most_category_l3_id",
+            "product_category_list"
     );
 
     public static final Map<String, String> INFLUENCER_FIELD_DESC = Map.ofEntries(
@@ -264,17 +266,18 @@ public final class FieldDictionary {
             Map.entry("total_sale_gmv_history_amt",      "总销售额(预估,USD,榜单)"),
             Map.entry("total_product_history_cnt",       "带货商品数总量（榜单）"),
             Map.entry("most_category_id",                "带货最多的一级品类ID（榜单）"),
-            Map.entry("product_category_list",           "达人所有带货类目（榜单）")
+            Map.entry("most_category_l2_id",             "带货最多的二级品类ID（榜单）"),
+            Map.entry("most_category_l3_id",             "带货最多的三级品类ID（榜单）"),
+            Map.entry("product_category_list",           "达人所有带货类目")
     );
 
-    // ==================== 视频字段（23个）====================
+    // ==================== 视频字段（31个）====================
 
     public static final List<String> VIDEO_LIST_FIELDS = List.of(
             // 基础
             "video_id", "unique_id", "user_id", "region",
             "video_desc", "create_time", "duration",
-            "is_ad", "created_by_ai",
-            "sales_flag", "product_id",
+            "is_ad", "created_by_ai", "sales_flag",
 
             // 互动（总量）
             "total_views_cnt",
@@ -285,11 +288,18 @@ public final class FieldDictionary {
 
             // 互动（增量）
             "total_views_1d_cnt", "total_views_7d_cnt", "total_views_30d_cnt",
-            "total_digg_7d_cnt", "total_digg_30d_cnt",
+            "total_digg_1d_cnt", "total_digg_7d_cnt", "total_digg_30d_cnt",
 
             // 带货
             "total_video_sale_cnt",
-            "total_video_sale_gmv_amt"
+            "total_video_sale_gmv_amt",
+
+            // 榜单特有（历史总量）
+            "nick_name",
+            "total_views_history_cnt", "total_digg_history_cnt",
+            "total_comments_history_cnt", "total_favorites_history_cnt",
+            "total_shares_history_cnt",
+            "total_video_sale_history_cnt", "total_video_sale_gmv_history_amt"
     );
 
     public static final Map<String, String> VIDEO_FIELD_DESC = Map.ofEntries(
@@ -303,7 +313,6 @@ public final class FieldDictionary {
             Map.entry("is_ad",                   "是否投流视频(1=是,0=否)"),
             Map.entry("created_by_ai",           "是否AI生成视频"),
             Map.entry("sales_flag",              "是否带货视频(1=是,0=否)"),
-            Map.entry("product_id",              "关联商品ID"),
             Map.entry("total_views_cnt",         "总播放量"),
             Map.entry("total_digg_cnt",          "总点赞量"),
             Map.entry("total_comments_cnt",      "总评论数"),
@@ -312,13 +321,23 @@ public final class FieldDictionary {
             Map.entry("total_views_1d_cnt",      "近1日播放增量"),
             Map.entry("total_views_7d_cnt",      "近7日播放增量"),
             Map.entry("total_views_30d_cnt",     "近30日播放增量"),
+            Map.entry("total_digg_1d_cnt",       "近1日点赞增量"),
             Map.entry("total_digg_7d_cnt",       "近7日点赞增量"),
             Map.entry("total_digg_30d_cnt",      "近30日点赞增量"),
-            Map.entry("total_video_sale_cnt",    "带货总销量(预估)"),
-            Map.entry("total_video_sale_gmv_amt","带货总GMV(预估,USD)")
+            Map.entry("total_video_sale_cnt",    "带货总销量(预估)（榜单中为周期内销量增量）"),
+            Map.entry("total_video_sale_gmv_amt","带货总GMV(预估,USD)（榜单中为周期内销售额增量）"),
+            // 榜单特有
+            Map.entry("nick_name",                       "发布者昵称（榜单）"),
+            Map.entry("total_views_history_cnt",         "播放量总量（榜单）"),
+            Map.entry("total_digg_history_cnt",          "点赞总量（榜单）"),
+            Map.entry("total_comments_history_cnt",      "评论总量（榜单）"),
+            Map.entry("total_favorites_history_cnt",     "收藏总量（榜单）"),
+            Map.entry("total_shares_history_cnt",        "分享总量（榜单）"),
+            Map.entry("total_video_sale_history_cnt",    "带货销量总量(预估,榜单)"),
+            Map.entry("total_video_sale_gmv_history_amt","带货GMV总量(预估,USD,榜单)")
     );
 
-    // ==================== 店铺字段（27个）====================
+    // ==================== 店铺字段（28个）====================
 
     public static final List<String> SELLER_LIST_FIELDS = List.of(
             // 基础
@@ -340,9 +359,8 @@ public final class FieldDictionary {
 
             // GMV
             "total_sale_gmv_amt",
-            "total_sale_gmv_7d_amt",
-            "total_sale_gmv_30d_amt",
-            "total_sale_gmv_90d_amt"
+            "total_sale_gmv_1d_amt", "total_sale_gmv_7d_amt",
+            "total_sale_gmv_30d_amt", "total_sale_gmv_90d_amt"
     );
 
     public static final Map<String, String> SELLER_FIELD_DESC = Map.ofEntries(
@@ -370,6 +388,7 @@ public final class FieldDictionary {
             Map.entry("total_sale_30d_cnt",     "近30日销量增量"),
             Map.entry("total_sale_90d_cnt",     "近90日销量增量"),
             Map.entry("total_sale_gmv_amt",     "总GMV(USD)"),
+            Map.entry("total_sale_gmv_1d_amt",  "近1日GMV增量(USD)"),
             Map.entry("total_sale_gmv_7d_amt",  "近7日GMV增量(USD)"),
             Map.entry("total_sale_gmv_30d_amt", "近30日GMV增量(USD)"),
             Map.entry("total_sale_gmv_90d_amt", "近90日GMV增量(USD)")

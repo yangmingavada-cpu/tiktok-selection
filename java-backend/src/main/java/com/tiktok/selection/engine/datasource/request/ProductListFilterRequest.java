@@ -23,15 +23,48 @@ public class ProductListFilterRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
+        // 基础信息
         "product_id", "product_name", "region",
         "category_id", "category_l2_id", "category_l3_id",
-        "min_price", "max_price", "spu_avg_price",
+        "min_price", "max_price", "spu_avg_price", "discount",
+        "free_shipping", "is_s_shop", "off_mark",
         "product_rating", "review_count",
         "product_commission_rate",
-        "total_sale_cnt", "total_sale_7d_cnt", "total_sale_30d_cnt",
-        "total_sale_gmv_amt", "total_sale_gmv_7d_amt", "total_sale_gmv_30d_amt",
-        "total_video_cnt", "total_views_cnt", "total_ifl_cnt",
-        "sales_trend_flag", "seller_id", "first_crawl_dt"
+        "sales_flag", "sales_trend_flag",
+        "seller_id", "cover_url", "first_crawl_dt", "last_crawl_dt",
+        "total_ifl_cnt",
+
+        // 总销量/GMV
+        "total_sale_cnt",
+        "total_sale_gmv_amt",
+
+        // 销量增量
+        "total_sale_1d_cnt", "total_sale_7d_cnt", "total_sale_15d_cnt",
+        "total_sale_30d_cnt", "total_sale_60d_cnt", "total_sale_90d_cnt",
+
+        // GMV增量
+        "total_sale_gmv_1d_amt", "total_sale_gmv_7d_amt", "total_sale_gmv_15d_amt",
+        "total_sale_gmv_30d_amt", "total_sale_gmv_60d_amt", "total_sale_gmv_90d_amt",
+
+        // 视频带货
+        "total_video_cnt",
+        "total_video_7d_cnt", "total_video_30d_cnt",
+        "total_video_sale_cnt",
+        "total_video_sale_7d_cnt", "total_video_sale_30d_cnt",
+        "total_video_sale_gmv_amt",
+        "total_video_sale_gmv_7d_amt", "total_video_sale_gmv_30d_amt",
+
+        // 直播带货
+        "total_live_cnt",
+        "total_live_7d_cnt", "total_live_30d_cnt",
+        "total_live_sale_cnt",
+        "total_live_sale_7d_cnt", "total_live_sale_30d_cnt",
+        "total_live_sale_gmv_amt",
+        "total_live_sale_gmv_7d_amt", "total_live_sale_gmv_30d_amt",
+
+        // 播放量
+        "total_views_cnt",
+        "total_views_7d_cnt", "total_views_30d_cnt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,
@@ -85,10 +118,10 @@ public class ProductListFilterRequest {
     public Integer max_total_sale_cnt;
 
     @McpParam(desc = "近30天销量最小值", type = "integer")
-    public Integer min_total_sale_30_d_cnt;
+    public Integer min_total_sale_30d_cnt;
 
     @McpParam(desc = "近30天销量最大值", type = "integer")
-    public Integer max_total_sale_30_d_cnt;
+    public Integer max_total_sale_30d_cnt;
 
     @McpParam(desc = "总GMV最小值(USD)", type = "number")
     public Double min_total_sale_gmv_amt;
@@ -97,10 +130,10 @@ public class ProductListFilterRequest {
     public Double max_total_sale_gmv_amt;
 
     @McpParam(desc = "近30天GMV最小值(USD)", type = "number")
-    public Double min_total_sale_gmv_30_d_amt;
+    public Double min_total_sale_gmv_30d_amt;
 
     @McpParam(desc = "近30天GMV最大值(USD)", type = "number")
-    public Double max_total_sale_gmv_30_d_amt;
+    public Double max_total_sale_gmv_30d_amt;
 
     @McpParam(desc = "关联视频数最小值", type = "integer")
     public Integer min_total_video_cnt;
@@ -126,11 +159,9 @@ public class ProductListFilterRequest {
     @McpParam(desc = "首次爬取日期最大值(yyyyMMdd)", example = "20241231")
     public String max_first_crawl_dt;
 
-    @McpParam(desc = "排序字段",
-        enumValues = {"total_sale_cnt", "total_sale_30_d_cnt", "total_sale_gmv_amt",
-                      "spu_avg_price", "product_rating", "review_count",
-                      "product_commission_rate", "total_ifl_cnt", "first_crawl_dt"})
-    public String product_sort_field;
+    @McpParam(desc = "列表排序字段：1=总销量 2=总GMV 3=商品均价 4=近7日销量 5=近30日销量 6=近7日GMV 7=近30日GMV",
+        type = "integer", enumValues = {"1", "2", "3", "4", "5", "6", "7"})
+    public Integer product_sort_field;
 
     @McpParam(desc = "排序方向：0=降序, 1=升序", type = "integer", enumValues = {"0", "1"})
     public Integer sort_type;
@@ -172,12 +203,12 @@ public class ProductListFilterRequest {
         if (max_product_commission_rate != null) params.put("max_product_commission_rate", max_product_commission_rate);
         if (min_total_sale_cnt != null) params.put("min_total_sale_cnt", min_total_sale_cnt);
         if (max_total_sale_cnt != null) params.put("max_total_sale_cnt", max_total_sale_cnt);
-        if (min_total_sale_30_d_cnt != null) params.put("min_total_sale_30_d_cnt", min_total_sale_30_d_cnt);
-        if (max_total_sale_30_d_cnt != null) params.put("max_total_sale_30_d_cnt", max_total_sale_30_d_cnt);
+        if (min_total_sale_30d_cnt != null) params.put("min_total_sale_30d_cnt", min_total_sale_30d_cnt);
+        if (max_total_sale_30d_cnt != null) params.put("max_total_sale_30d_cnt", max_total_sale_30d_cnt);
         if (min_total_sale_gmv_amt != null) params.put("min_total_sale_gmv_amt", min_total_sale_gmv_amt);
         if (max_total_sale_gmv_amt != null) params.put("max_total_sale_gmv_amt", max_total_sale_gmv_amt);
-        if (min_total_sale_gmv_30_d_amt != null) params.put("min_total_sale_gmv_30_d_amt", min_total_sale_gmv_30_d_amt);
-        if (max_total_sale_gmv_30_d_amt != null) params.put("max_total_sale_gmv_30_d_amt", max_total_sale_gmv_30_d_amt);
+        if (min_total_sale_gmv_30d_amt != null) params.put("min_total_sale_gmv_30d_amt", min_total_sale_gmv_30d_amt);
+        if (max_total_sale_gmv_30d_amt != null) params.put("max_total_sale_gmv_30d_amt", max_total_sale_gmv_30d_amt);
         if (min_total_video_cnt != null) params.put("min_total_video_cnt", min_total_video_cnt);
         if (max_total_video_cnt != null) params.put("max_total_video_cnt", max_total_video_cnt);
         if (min_total_views_cnt != null) params.put("min_total_views_cnt", min_total_views_cnt);

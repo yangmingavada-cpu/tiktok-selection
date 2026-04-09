@@ -21,12 +21,35 @@ public class SellerProductTraverseRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "product_id", "product_name", "region", "category_id",
-        "min_price", "max_price", "spu_avg_price",
+        // 基础信息
+        "product_id", "product_name", "region",
+        "category_id", "category_l2_id", "category_l3_id",
+        "min_price", "max_price", "spu_avg_price", "discount",
+        "free_shipping", "is_s_shop", "off_mark",
         "product_rating", "review_count",
-        "total_sale_7d_cnt", "total_sale_30d_cnt",
-        "total_sale_gmv_7d_amt", "total_sale_gmv_30d_amt",
-        "product_commission_rate", "seller_id"
+        "product_commission_rate",
+        "sales_flag", "sales_trend_flag",
+        "seller_id", "cover_url", "first_crawl_dt",
+        "total_ifl_cnt",
+
+        // 总销量/GMV
+        "total_sale_cnt", "total_sale_gmv_amt",
+
+        // 销量增量
+        "total_sale_1d_cnt", "total_sale_7d_cnt", "total_sale_15d_cnt",
+        "total_sale_30d_cnt", "total_sale_60d_cnt", "total_sale_90d_cnt",
+
+        // GMV增量
+        "total_sale_gmv_1d_amt", "total_sale_gmv_7d_amt", "total_sale_gmv_15d_amt",
+        "total_sale_gmv_30d_amt", "total_sale_gmv_60d_amt", "total_sale_gmv_90d_amt",
+
+        // 视频带货
+        "total_video_cnt",
+        "total_video_7d_cnt", "total_video_30d_cnt",
+
+        // 播放量
+        "total_views_cnt",
+        "total_views_7d_cnt", "total_views_30d_cnt"
     );
 
     @JsonAlias("maxItems")

@@ -35,7 +35,8 @@ public class InfluencerRanklistRequest {
         "total_sale_history_cnt", "total_sale_gmv_history_amt",
         "total_product_history_cnt",
         // 品类
-        "most_category_id", "product_category_list"
+        "most_category_id", "most_category_l2_id", "most_category_l3_id",
+        "product_category_list"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

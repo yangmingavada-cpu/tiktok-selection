@@ -22,10 +22,12 @@ public class SellerRanklistRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "seller_id", "seller_name", "region",
+        "seller_id", "seller_name", "user_id", "region",
         "category_id", "category_l2_id", "category_l3_id",
-        "total_sale_cnt", "total_sale_gmv_amt", "total_ifl_cnt",
-        "rank_position"
+        "rating",
+        "total_sale_cnt", "total_sale_gmv_amt",
+        "total_ifl_cnt", "total_product_cnt",
+        "total_live_cnt", "total_video_cnt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

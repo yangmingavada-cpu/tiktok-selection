@@ -21,12 +21,11 @@ public class InfluencerProductTraverseRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "product_id", "product_name", "region", "category_id",
-        "min_price", "max_price", "spu_avg_price",
-        "product_rating", "review_count",
-        "total_sale_7d_cnt", "total_sale_30d_cnt",
-        "total_sale_gmv_7d_amt", "total_sale_gmv_30d_amt",
-        "product_commission_rate", "seller_id"
+        "product_id", "product_name", "category_id", "spu_avg_price",
+        "total_sale_cnt", "total_sale_gmv_amt",
+        "total_video_cnt", "total_video_sale_cnt", "total_video_sale_gmv_amt",
+        "total_live_cnt", "total_live_sale_cnt", "total_live_sale_gmv_amt",
+        "user_id"
     );
 
     @JsonAlias("maxItems")

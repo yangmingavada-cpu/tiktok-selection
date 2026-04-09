@@ -49,7 +49,8 @@ public class InfluencerListFilterRequest {
         "total_product_cnt", "total_product_30d_cnt",
         "total_video_product_30d_cnt",
         "avg_30d_price",
-        "per_video_product_views_avg_7d_cnt"
+        "per_video_product_views_avg_7d_cnt",
+        "product_category_list"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

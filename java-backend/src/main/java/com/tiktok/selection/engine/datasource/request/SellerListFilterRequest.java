@@ -22,11 +22,27 @@ public class SellerListFilterRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "seller_id", "seller_name", "region",
+        // 基础信息
+        "seller_id", "seller_name", "user_id", "region",
         "category_id", "category_l2_id", "category_l3_id",
+        "rating", "spu_avg_price",
         "from_flag", "sales_flag", "sales_trend_flag",
-        "total_sale_cnt", "total_sale_gmv_amt", "spu_avg_price",
-        "product_count", "follower_count", "avg_rating", "shop_score"
+        "first_crawl_dt",
+
+        // 商品/达人/内容数
+        "total_crawl_product_cnt", "total_product_cnt",
+        "total_ifl_cnt",
+        "total_live_cnt", "total_video_cnt",
+
+        // 销量
+        "total_sale_cnt",
+        "total_sale_1d_cnt", "total_sale_7d_cnt",
+        "total_sale_30d_cnt", "total_sale_90d_cnt",
+
+        // GMV
+        "total_sale_gmv_amt",
+        "total_sale_gmv_1d_amt", "total_sale_gmv_7d_amt",
+        "total_sale_gmv_30d_amt", "total_sale_gmv_90d_amt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,
