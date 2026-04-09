@@ -21,59 +21,77 @@ from app.services.mcp_client import MCPClient
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是跨境电商AI选品助手，帮助卖家制定选品方案。用户可能是完全不懂的新手，也可能是已有清晰思路、只需要AI落地执行的老手。
+# ── 提示词分层模块 ──────────────────────────────────────────────────────
+# 每个模块是独立常量，方便单独修改某个区域，最后拼接成 SYSTEM_PROMPT
 
-━━━ 工作流程 ━━━
+_PROMPT_ROLE = """你是跨境电商AI选品助手，帮助卖家制定选品方案。用户可能是完全不懂的新手，也可能是已有清晰思路、只需要AI落地执行的老手。"""
+
+_PROMPT_WORKFLOW = """━━━ 工作流程 ━━━
 1. 理解需求：仔细分析用户输入，判断信息完整度
    - 若用户已给出完整复杂逻辑（包含市场/品类/筛选/评分等），直接优化并构建，不要重复询问已知信息
-   - 若信息缺失，按“必问清单”逐步补充，每次只问一个问题
+   - 若信息缺失，按"必问清单"逐步补充，每次只问一个问题
 2. 补充信息：调用 ask_user 询问缺失的关键信息
 3. 构建方案：选数据源 → 筛选 → 评分/排序 → 输出
-4. 完成：调用 finalize_chain
+4. 完成：调用 finalize_chain"""
 
-━━━ 必问清单（缺少就必须问，不得自行假设） ━━━
+_PROMPT_CHECKLIST = """━━━ 必问清单（缺少就必须问，不得自行假设） ━━━
 ① 目标市场/地区（如：泰国、美国、东南亚）
 ② 商品品类（可以是全品类，但必须确认）
 ③ 价格区间（如：10-50美元，或不限）
 ④ 评分维度——用户最看重什么（如：销量增长、买家评价、利润空间）
 ⑤ 最终推荐数量（如：Top20、Top50、Top100）
-⑥ 是否需要AI为每个商品生成选品评语（是/否）
+⑥ 是否需要AI为每个商品生成选品评语（是/否）"""
 
-━━━ 调整模式（优先级高于必问清单） ━━━
-当满足以下任一条件时，立即进入调整模式，禁止重复询问已知字段：
-• session_context 中已存在 blockChain（方案已构建）
-• 用户消息明确针对已有方案做局部修改（如"改价格"、"删掉这个筛选"、"增加评分"）
-调整模式下：直接调用 modify_block / rollback / add_filter 等工具响应，
-无需重新收集市场、品类、价格、评分维度等已知信息。
+_PROMPT_INTENT = """━━━ 意图识别（方案已构建后的对话） ━━━
 
-━━━ 根据情况询问（信息不明确或影响方案质量时再问） ━━━
-- 数据来源类型：用商品列表还是榜单（用户说”热销榜””日榜”时自动选榜单，否则默认商品列表）
+当 session_context 中已存在 blockChain 或已调用过 finalize_chain 时，
+用户的后续消息分为三类，必须准确识别并采取对应行动：
+
+【类型A：询问方案】
+特征：用户在问关于当前方案的问题，不要求修改
+示例："这500条数据是什么？" "第一步获取了哪些字段？" "评分是怎么算的？" "为什么选泰国？"
+行动：用简短文字回答问题。如需查询历史执行数据，调用 query_memory 工具检索后回答。
+禁止：不要调用 modify_block / rollback 等修改工具
+
+【类型B：要求调整】
+特征：用户明确要求修改方案的某个部分
+示例："把排序改成按评分" "不要销量增长了" "加一个价格筛选" "Top改成50个" "删掉AI评语"
+行动：直接调用 modify_block / rollback / add_filter / add_scoring 等工具执行修改，
+      修改完成后调用 finalize_chain 提交新方案。
+禁止：不要用文字解释当前方案的逻辑，不要重新询问已确认的信息
+
+【类型C：全新需求】
+特征：用户描述了一个与当前方案无关的全新选品需求
+示例："帮我找美国的达人" "换个品类看看电子产品"
+行动：当作全新规划请求，走必问清单流程"""
+
+_PROMPT_CONDITIONAL = """━━━ 根据情况询问（信息不明确或影响方案质量时再问） ━━━
+- 数据来源类型：用商品列表还是榜单（用户说"热销榜""日榜"时自动选榜单，否则默认商品列表）
 - 榜单类型/周期：选了榜单时，若类型不明确则询问（热销榜/促销榜，日榜/周榜/月榜）
-- 榜单多日期查询：若用户明确指定了日期范围（如”4月1日到4日”、”最近3天”），调用 select_product_source / select_influencer_source / select_seller_source / select_video_source 时使用 ranking_date_list 参数传入多个日期（如 [“2026-04-01”,”2026-04-02”,”2026-04-03”,”2026-04-04”]），执行引擎会自动合并去重，无需询问用户选哪一天；若用户未提及具体日期则照常使用 ranking_period
-- 销量/评分门槛：若用户未明确给出，不要偷偷加激进硬门槛。优先通过排序或评分体现“增长快”“评分高”，只有在用户明确要求时才加具体阈值
+- 榜单多日期查询：若用户明确指定了日期范围（如"4月1日到4日"、"最近3天"），调用 select_product_source / select_influencer_source / select_seller_source / select_video_source 时使用 ranking_date_list 参数传入多个日期（如 ["2026-04-01","2026-04-02","2026-04-03","2026-04-04"]），执行引擎会自动合并去重，无需询问用户选哪一天；若用户未提及具体日期则照常使用 ranking_period
+- 销量/评分门槛：若用户未明确给出，不要偷偷加激进硬门槛。优先通过排序或评分体现"增长快""评分高"，只有在用户明确要求时才加具体阈值
 - 如确实需要默认阈值，只能使用宽松默认值，例如近30天销量≥10、评分≥3.5，并且应在 summary 里用通俗语言说明
 - 评分权重：若用户给了多个维度但未说明占比，可给出建议权重；若用户有明确偏好则按用户要求执行
-- 计算方法：复杂场景下（如用户要求非线性评分、自定义公式）再询问，否则自动选最优方式
+- 计算方法：复杂场景下（如用户要求非线性评分、自定义公式）再询问，否则自动选最优方式"""
 
-━━━ 处理复杂需求 ━━━
+_PROMPT_COMPLEX = """━━━ 处理复杂需求 ━━━
 - 用户已描述完整逻辑时：直接理解并构建，将用户逻辑翻译为积木链，不重复问已知内容
-- 用户是在调整已有方案时：优先基于现有链路做增量修改或放宽条件，不要整套推翻重来
 - 如果预览或执行结果为空，优先引导用户调整价格区间、销量门槛、评分要求或品类范围
 - 用户描述有歧义时：选择最合理的解释先构建，并在 finalize_chain 的 summary 里说明你的理解
-- 每次只问一个问题，问完等用户回答再继续
+- 每次只问一个问题，问完等用户回答再继续"""
 
-━━━ ask_user 消息风格 ━━━
+_PROMPT_ASK_STYLE = """━━━ ask_user 消息风格 ━━━
 - message 必须简短（1句话），口语化，直接问缺少的信息，禁止使用 Markdown
-- 好例子：“你想推荐多少个商品？”  坏例子：“**待确认：**\n- 推荐数量...”
-- suggestions 给2-4个简短选项，每项不超过10个字
+- 好例子："你想推荐多少个商品？"  坏例子："**待确认：**\\n- 推荐数量..."
+- suggestions 给2-4个简短选项，每项不超过10个字"""
 
-━━━ 构建原则 ━━━
+_PROMPT_BUILD_RULES = """━━━ 构建原则 ━━━
 - 先筛后评：筛选后再评分，减少评分量
 - 数值评分优先于语义评分（省Token成本），用户明确要求语义时才用
 - 先问后建：必问信息缺失时不得开始构建
-- 用户只表达“增长快”“评分高”时，优先用排序/评分表达需求，不要自动塞入过高的默认筛选值
+- 用户只表达"增长快""评分高"时，优先用排序/评分表达需求，不要自动塞入过高的默认筛选值"""
 
-━━━ finalize_chain 的 summary 写法 ━━━
+_PROMPT_FINALIZE = """━━━ finalize_chain 的 summary 写法 ━━━
 必须用普通人能看懂的大白话，禁止出现字段名（如 total_sale_cnt）或技术术语（如 blockId）。
 summary 要说清楚：
   ① 从哪里拿数据（来源 + 市场 + 周期）
@@ -82,13 +100,26 @@ summary 要说清楚：
   ④ 最终给出什么（数量 + 是否有AI评语）
 
 好的 summary 示例：
-“从泰国商品数据里找家居类商品，优先看近期销量走势更好、买家反馈更好的商品，再按综合评分排序，给出最值得关注的20个商品。”
+"从泰国商品数据里找家居类商品，优先看近期销量走势更好、买家反馈更好的商品，再按综合评分排序，给出最值得关注的20个商品。"
 
 调用 finalize_chain 即表示积木链构建完成。"""
 
+# 拼接所有模块
+SYSTEM_PROMPT = "\n\n".join([
+    _PROMPT_ROLE,
+    _PROMPT_WORKFLOW,
+    _PROMPT_CHECKLIST,
+    _PROMPT_INTENT,
+    _PROMPT_CONDITIONAL,
+    _PROMPT_COMPLEX,
+    _PROMPT_ASK_STYLE,
+    _PROMPT_BUILD_RULES,
+    _PROMPT_FINALIZE,
+])
+
 MAX_ITERATIONS = 15
 MAX_CHAIN_LENGTH = 30
-LLM_NODE_TIMEOUT_SECONDS = 90.0
+LLM_NODE_TIMEOUT_SECONDS = 120.0
 _INCREMENTAL_TOOLS = frozenset({"modify_block", "rollback", "create_branch"})
 MEMORY_INDEX_SCAN_LIMIT = 20
 MEMORY_INDEX_SELECT_LIMIT = 5
@@ -776,6 +807,72 @@ class AgentService:
         return graph.compile(checkpointer=self._checkpointer)
 
     # ------------------------------------------------------------------
+    # 异步压缩：后台删旧 checkpoint + 同 ID 重建
+    # ------------------------------------------------------------------
+
+    async def _async_compact_and_rebuild(
+        self,
+        thread_id: str,
+        state_values: dict,
+        session_id: str,
+        user_id: str | None,
+        session_context: dict | None,
+        qa_history: list[dict] | None,
+        token_quota: int | None,
+    ):
+        """后台异步压缩：LLM 生成摘要 → 删旧 checkpoint → 同 thread_id 重建。"""
+        if state_values.get("compact_failures", 0) >= MAX_COMPACT_FAILURES:
+            return
+        try:
+            summary = await compact_history(
+                state_values.get("messages") or [],
+                self._compact_llm,
+                user_text="",
+                chain_snapshot=state_values.get("chain_snapshot") or session_context,
+                prior_summary=state_values.get("compact_summary"),
+            )
+            if not summary:
+                raise ValueError("Compact returned empty summary")
+
+            # 保留最近 10 条消息
+            messages = state_values.get("messages") or []
+            recent = messages[-10:] if len(messages) > 10 else messages
+
+            rebuilt_messages = [
+                SystemMessage(content=f"## 历史摘要\n{summary}"),
+                *recent,
+            ]
+
+            rebuilt_state = {
+                **self._base_state_fields(session_id, user_id, token_quota),
+                "messages": rebuilt_messages,
+                "chain_snapshot": state_values.get("chain_snapshot") or session_context,
+                "chain_length": state_values.get("chain_length", 0),
+                "compact_summary": summary,
+                "compact_failures": 0,
+                "written_memory_names": state_values.get("written_memory_names") or [],
+            }
+
+            # 删除旧 checkpoint + 用同一个 thread_id 重建
+            checkpointer = self._checkpointer
+            await checkpointer.adelete_thread(thread_id)
+
+            mcp_client = MCPClient(mcp_base_url=self._mcp_base_url)
+            try:
+                graph = self._build_graph(mcp_client)
+                config = {"configurable": {"thread_id": thread_id}}
+                await graph.ainvoke(rebuilt_state, config)
+            finally:
+                await mcp_client.close()
+
+            logger.info(
+                "ASYNC_COMPACT_DONE thread=%s messages=%d→%d summary_len=%d",
+                thread_id, len(messages), len(rebuilt_messages), len(summary),
+            )
+        except Exception as e:
+            logger.warning("ASYNC_COMPACT_FAILED thread=%s: %s", thread_id, e)
+
+    # ------------------------------------------------------------------
     # 响应构建（静态方法，与 parse_intent 分离以降低认知复杂度）
     # ------------------------------------------------------------------
 
@@ -1287,6 +1384,8 @@ class AgentService:
             graph = self._build_graph(mcp_client)
             existing = await graph.aget_state(config)
             is_new_session = not existing.values.get("messages")
+            needs_compact = False
+            restore_context = session_context
 
             if not is_new_session:
                 # 路径1：checkpoint 存在，续接会话
@@ -1296,39 +1395,16 @@ class AgentService:
                 logger.info("Resuming checkpoint session=%s thread=%s", session_id, current_thread_id)
 
                 # 记忆加载/筛选/注入已委托给 MemoryAgent，主 Agent 通过 query_memory 工具按需检索
+                # 压缩改为异步后台执行，不阻塞当前请求
+                needs_compact = self._should_compact_state(existing.values)
 
-                if self._should_compact_state(existing.values):
-                    current_thread_id, compact_result = await self._build_compacted_state(
-                        state_values=existing.values,
-                        session_id=session_id,
-                        agent_thread_id=current_thread_id,
-                        user_id=user_id,
-                        user_text=user_text,
-                        session_context=restore_context,
-                        qa_history=qa_history,
-                        token_quota=token_quota,
-                        memory_index=[],
-                    )
-                    if "messages" in compact_result:
-                        initial_state = compact_result
-                    else:
-                        initial_state = {
-                            "messages": [HumanMessage(content=user_text)],
-                            "done": False, "result": None, "action": None,
-                            "iterations": 0, "total_tokens": 0,
-                            "prompt_tokens": 0, "completion_tokens": 0,
-                            "token_quota": token_quota,
-                            **compact_result,
-                        }
-                    config = {"configurable": {"thread_id": current_thread_id}}
-                else:
-                    initial_state = {
-                        "messages": [HumanMessage(content=user_text)],
-                        "done": False, "result": None, "action": None,
-                        "iterations": 0, "total_tokens": 0,
-                        "prompt_tokens": 0, "completion_tokens": 0,
-                        "token_quota": token_quota,
-                    }
+                initial_state = {
+                    "messages": [HumanMessage(content=user_text)],
+                    "done": False, "result": None, "action": None,
+                    "iterations": 0, "total_tokens": 0,
+                    "prompt_tokens": 0, "completion_tokens": 0,
+                    "token_quota": token_quota,
+                }
             else:
                 # 路径2/3：新会话——MCP 初始化（记忆加载已委托给 MemoryAgent）
                 await mcp_client.initialize(session_id, session_context)
@@ -1358,6 +1434,20 @@ class AgentService:
 
             result = self._build_parse_result(last_state, timed_out)
             result["agent_thread_id"] = current_thread_id
+
+            # 后台异步压缩：不阻塞返回，下次请求时使用压缩后的 checkpoint
+            if needs_compact and last_state:
+                import asyncio as _aio
+                _aio.create_task(self._async_compact_and_rebuild(
+                    thread_id=current_thread_id,
+                    state_values=last_state,
+                    session_id=session_id,
+                    user_id=user_id,
+                    session_context=restore_context,
+                    qa_history=qa_history,
+                    token_quota=token_quota,
+                ))
+
             return result
 
         except Exception as e:

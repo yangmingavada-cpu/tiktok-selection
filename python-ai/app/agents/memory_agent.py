@@ -104,6 +104,8 @@ class MemoryAgent:
         self._llm = llm
         self._agent_thread_id = agent_thread_id
         self._user_id = user_id
+        # 所有历史线程ID（压缩会生成新ID，旧ID的记忆仍需可查）
+        self._all_thread_ids: list[str] = [agent_thread_id]
         # 内部状态：已读取的文件路径（避免重复筛选）
         self._surfaced_paths: set[str] = set()
         # 已写入的记忆名称（供蒸馏去重）
@@ -111,12 +113,22 @@ class MemoryAgent:
         # 缓存的 updatedAt 映射
         self._updated_at_map: dict[str, str] = {}
 
+    def update_thread_id(self, new_id: str):
+        """压缩后更新线程ID。新写入用新ID，查询时合并所有历史ID。"""
+        self._agent_thread_id = new_id
+        if new_id not in self._all_thread_ids:
+            self._all_thread_ids.append(new_id)
+
     async def query(self, question: str, active_tools: list[str] | None = None) -> str:
         """
         自然语言检索记忆，返回格式化内容。
         主 Agent 调用 query_memory 工具时触发。
         """
-        raw_index = await self._memory_client.list_index(session_id=self._agent_thread_id)
+        # 合并查询所有历史线程ID下的记忆（压缩前+压缩后）
+        raw_index = []
+        for tid in self._all_thread_ids:
+            idx = await self._memory_client.list_index(session_id=tid)
+            raw_index.extend(idx)
         if not raw_index:
             return "（记忆系统为空，尚无历史记录）"
 

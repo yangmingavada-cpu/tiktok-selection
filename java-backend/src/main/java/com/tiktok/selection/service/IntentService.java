@@ -317,7 +317,7 @@ public class IntentService {
      */
     public SseEmitter interpretBlockChainStream(List<Map<String, Object>> blockChain,
                                                 String userId, String sessionId) {
-        SseEmitter emitter = new SseEmitter(120_000L);
+        SseEmitter emitter = new SseEmitter(200_000L);
 
         List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
 

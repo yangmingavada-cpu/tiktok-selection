@@ -164,7 +164,7 @@ const lastBlockChain = shallowRef<Block[] | null>(null)
 const askDialog = ref<AskDialogState>({ visible: false, question: '', suggestions: [] })
 const qaHistory = ref<{ q: string; a: string }[]>([])
 const originalRequest = shallowRef('')
-const PLANNING_IDLE_TIMEOUT_MS = 120_000
+const PLANNING_IDLE_TIMEOUT_MS = 200_000
 let planningActivityTimer: number | null = null
 let activeBuildSessionId = ''
 const planningStatus = shallowRef<PlanningStatus>('idle')
@@ -705,23 +705,12 @@ async function submitPrompt(rawText: string) {
   }
 }
 
-function tryAnswerPendingPlanQuestion(text: string): boolean {
-  const latestPlan = getLatestPlanMessage()
-  if (!pendingPlan.value || !latestPlan?.plan?.length) return false
-
-  const answer = answerPlanQuestion(text, latestPlan.plan)
-  if (!answer) return false
-
-  addMessage({ role: 'user', text })
-  addMessage({ role: 'ai', text: answer })
-  inputText.value = ''
-  return true
-}
+// tryAnswerPendingPlanQuestion 已移除：所有消息统一发到后端 AI 处理
+// 后端意图识别模块（类型A/B/C）区分询问方案和要求调整
 
 async function handleSend() {
   const text = inputText.value.trim()
   if (!text) return
-  if (tryAnswerPendingPlanQuestion(text)) return
   await submitPrompt(text)
 }
 
