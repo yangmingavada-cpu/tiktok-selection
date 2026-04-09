@@ -39,7 +39,9 @@ public class AddScoringTool implements McpTool {
                 + "- semantic: LLM语义评分，按semantic_prompt对每批≤5条数据调用LLM打分，消耗Token，仅用于无法用数值表达的维度（如'创意性'、'品牌调性'）\n"
                 + "weight为各维度相对权重，所有维度权重之和无需等于100，系统自动归一化。",
                 schema(props(
-                        prop("scoring_type", "string", "评分类型", List.of("numeric", "semantic")),
+                        prop("scoring_type", "string",
+                                "评分类型：numeric(必须传source_field) 或 semantic(必须传semantic_prompt)",
+                                List.of("numeric", "semantic")),
                         propReq("dimension_name", "string",
                                 "维度名称，如'销量表现'、'价格竞争力'、'创新性'，将作为字段名的一部分"),
                         propReq("weight", "integer", "相对权重(建议1-10)，与其他维度的weight对比决定占比"),

@@ -33,10 +33,11 @@ public class RollbackTool implements McpTool {
         return tool("rollback",
                 "回退积木链到指定步骤，删除该步骤之后的所有块（仅限增量模式）。\n"
                 + "回退后available_fields和outputType将重建为目标步骤时的状态。\n"
-                + "当用户要求推倒重来某个环节，或需要走不同分支策略时使用。",
+                + "to_step范围: 1~" + maxStep + "（当前链长度），0无效。\n"
+                + "示例：当前链有5步，to_step=3 表示保留前3步，删除第4、5步。",
                 schema(props(
                         propReq("to_step", "integer",
-                                "保留到第N步（含），范围1-" + maxStep + "，之后的块将被删除")
+                                "保留到第N步（含），范围1-" + maxStep + "，必须>=1，之后的块将被删除")
                 ), List.of("to_step")));
     }
 
@@ -55,7 +56,13 @@ public class RollbackTool implements McpTool {
                     .build();
         }
 
-        int toStep = toStepObj instanceof Number n ? n.intValue() : -1;
+        int toStep;
+        if (toStepObj instanceof Number n) {
+            toStep = n.intValue();
+        } else {
+            try { toStep = Integer.parseInt(String.valueOf(toStepObj)); }
+            catch (NumberFormatException e) { toStep = -1; }
+        }
         List<Map<String, Object>> blocks = session.getBlocks();
 
         if (toStep < 1 || toStep > blocks.size()) {

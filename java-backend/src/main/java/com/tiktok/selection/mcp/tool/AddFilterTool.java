@@ -28,10 +28,13 @@ public class AddFilterTool implements McpTool {
     @Override
     public Map<String, Object> buildSchema(ChainBuildSession session) {
         return tool("add_filter",
-                "添加一条筛选条件（对数据行按字段值过滤）。\n"
-                + "可多次调用，多个条件之间是AND（全部满足）关系。\n"
-                + "field必须来自当前available_fields，传入不存在的字段会报错。\n"
-                + "operator使用建议：数值字段用 >/</>=/<=；枚举字段（如sales_trend_flag）用 ==；范围用 between，值为[min,max]；多值匹配用 in，值为数组。",
+                "添加一条筛选条件（对数据行按字段值过滤）。可多次调用，条件之间为AND关系。\n"
+                + "field必须来自当前available_fields。\n"
+                + "【推荐】范围筛选请分两次调用 >= 和 <=，例如价格50-100元：\n"
+                + "  第1次: field=\"spu_avg_price\", operator=\">=\", value=50\n"
+                + "  第2次: field=\"spu_avg_price\", operator=\"<=\", value=100\n"
+                + "operator说明：>=/<=/>/< 用于数值范围（分两次调用）；== 用于精确匹配；!= 用于排除；in 用于多值匹配（value传数组如[1,2,3]）。\n"
+                + "高级：between运算符value必须传JSON数组[min,max]，但推荐用 >= + <= 替代更不易出错。",
                 schema(props(
                         propDynEnum("field", "筛选字段，必须在当前available_fields中",
                                 session.getAvailableFields(),
@@ -62,18 +65,34 @@ public class AddFilterTool implements McpTool {
         }
 
         if (field == null || operator == null || value == null) {
+            String missing = (field == null ? "field " : "")
+                    + (operator == null ? "operator " : "")
+                    + (value == null ? "value" : "");
             return McpObservation.builder()
                     .success(false)
-                    .error("field、operator、value均为必填参数")
+                    .error("缺少必填参数: " + missing.trim()
+                            + "。示例: field=\"spu_avg_price\", operator=\">=\", value=50")
                     .build();
         }
 
-        // between 算子要求 value 为 [min, max] 两元素数组
-        if ("between".equals(operator) && (!(value instanceof List<?> list) || list.size() < 2)) {
-            return McpObservation.builder()
-                    .success(false)
-                    .error("between运算符的value必须为 [min, max] 两元素数组")
-                    .build();
+        // between 算子：尝试自动修正常见错误格式
+        if ("between".equals(operator)) {
+            if (value instanceof String str) {
+                String[] parts = str.split("[-,]");
+                if (parts.length == 2) {
+                    try {
+                        value = List.of(Double.parseDouble(parts[0].trim()),
+                                        Double.parseDouble(parts[1].trim()));
+                        args.put("value", value);
+                    } catch (NumberFormatException ignored) { /* fall through */ }
+                }
+            }
+            if (!(value instanceof List<?> list) || list.size() < 2) {
+                return McpObservation.builder()
+                        .success(false)
+                        .error("between的value必须为[min,max]数组，如[50,100]。推荐改用两次调用: >= 50 和 <= 100")
+                        .build();
+            }
         }
 
         // 校验字段是否在available_fields中

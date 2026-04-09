@@ -42,7 +42,7 @@ public class AddComputationTool implements McpTool {
                 "添加计算衍生字段，结果加入available_fields供后续筛选或评分使用。\n"
                 + "各computation_type说明：\n"
                 + "- growth_rate: 增长率计算，公式=(7日销量 - 30日销量/4.3)/(30日销量/4.3)×100，反映近期加速/减速趋势，需传input_field_a(7日字段)和input_field_b(30日字段)\n"
-                + "- profit_margin: 估算利润率，基于均价×(1-30%成本系数)，需传input_field_a(价格字段)\n"
+                + "- profit_margin: 估算利润率，需传input_field_a(价格字段，如spu_avg_price)和input_field_b(成本字段)，两者都必填。如数据中无成本字段，建议改用custom_formula估算，如formula='spu_avg_price * 0.3'\n"
                 + "- daily_average: 日均值，将累计销量除以天数，需传input_field_a(含天数的累计字段，如total_sale_30d_cnt)\n"
                 + "- custom_formula: 自定义表达式，需传formula参数（如'total_sale_7d_cnt * 4.3'），支持 field OP field 或 field OP 常量，OP为+/-/*///\n"
                 + "- field_trim: 字段裁剪，仅保留keep_fields中指定的字段，减少后续Token消耗，适合字段很多时精简",
