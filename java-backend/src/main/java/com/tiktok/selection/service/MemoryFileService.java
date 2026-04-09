@@ -198,6 +198,16 @@ public class MemoryFileService {
     }
 
     /**
+     * 格式化索引行（不截断 description）
+     */
+    private static String formatIndexLine(UserMemoryFile r) {
+        String fileName = Paths.get(r.getFilePath()).getFileName().toString();
+        String desc = r.getDescription() != null ? r.getDescription() : "";
+        int seq = r.getSeq() != null ? r.getSeq() : 0;
+        return String.format("- #%d [%s](%s) — %s%n", seq, r.getName(), fileName, desc);
+    }
+
+    /**
      * 获取下一个 seq：common(sessionId=null) 按 userId 递增，session 按 sessionId 递增。
      */
     private int getNextSeq(String userId, String sessionId) {
@@ -242,28 +252,52 @@ public class MemoryFileService {
             records = records.subList(records.size() - INDEX_MAX_ROWS, records.size());
         }
 
-        StringBuilder sb = new StringBuilder("# Memory Index\n\n");
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Memory Index\n\n");
+        sb.append("## 说明\n");
+        sb.append("本文件是选品会话的记忆索引，记录了本次对话中所有工具调用和执行结果。\n\n");
+        sb.append("### 结构\n");
+        sb.append("- 按 **阶段** 分为「规划阶段」和「执行阶段」两个区域\n");
+        sb.append("- 每个条目格式：`#seq [名称-chainHash](文件路径) — 描述`\n");
+        sb.append("- **seq**：会话内递增序号，标识时间顺序\n");
+        sb.append("- **chainHash**：积木链内容的 MD5 前6位，标识属于哪个版本的积木链。同一个 chainHash 表示同一版本的方案\n\n");
+        sb.append("### 阶段说明\n");
+        sb.append("- **规划阶段**：AI 构建积木链时调用工具的参数和返回结果\n");
+        sb.append("- **执行阶段**：积木链实际执行后获取的真实数据（含前50条数据明细表格）\n\n");
+        sb.append("### 如何使用\n");
+        sb.append("- 用户询问方案逻辑 → 查看规划阶段的 finalize_chain 条目\n");
+        sb.append("- 用户询问真实数据 → 查看执行阶段的步骤条目\n");
+        sb.append("- 调用 query_memory 工具读取具体 md 文件获取完整内容\n\n");
+        sb.append("---\n\n");
 
-        // 按 blockChainHash 分组输出，null hash 归入 common 组
-        String currentHash = "\0";
-        for (UserMemoryFile r : records) {
-            String hash = r.getBlockChainHash();
-            if (!Objects.equals(hash, currentHash)) {
-                currentHash = hash;
-                if (hash != null) {
-                    sb.append(String.format("%n## chain:%s%n", hash));
-                } else {
-                    sb.append(String.format("%n## common — 用户画像%n"));
-                }
+        // 按 phase 分组：先规划，后执行，最后 common
+        List<UserMemoryFile> planRecords = records.stream()
+                .filter(r -> "规划".equals(r.getPhase())).toList();
+        List<UserMemoryFile> execRecords = records.stream()
+                .filter(r -> "执行".equals(r.getPhase())).toList();
+        List<UserMemoryFile> otherRecords = records.stream()
+                .filter(r -> r.getPhase() == null || (!"规划".equals(r.getPhase()) && !"执行".equals(r.getPhase()))).toList();
+
+        if (!planRecords.isEmpty()) {
+            sb.append("## 规划阶段\n");
+            for (UserMemoryFile r : planRecords) {
+                sb.append(formatIndexLine(r));
             }
-            String fileName = Paths.get(r.getFilePath()).getFileName().toString();
-            String desc = r.getDescription() != null ? r.getDescription() : "";
-            int seq = r.getSeq() != null ? r.getSeq() : 0;
-            String line = String.format("- #%d [%s](%s) — %s%n", seq, r.getName(), fileName, desc);
-            if (line.length() > INDEX_MAX_LINE) {
-                line = line.substring(0, INDEX_MAX_LINE) + "\n";
+            sb.append("\n");
+        }
+        if (!execRecords.isEmpty()) {
+            sb.append("## 执行阶段（真实数据）\n");
+            for (UserMemoryFile r : execRecords) {
+                sb.append(formatIndexLine(r));
             }
-            sb.append(line);
+            sb.append("\n");
+        }
+        if (!otherRecords.isEmpty()) {
+            sb.append("## 用户画像\n");
+            for (UserMemoryFile r : otherRecords) {
+                sb.append(formatIndexLine(r));
+            }
+            sb.append("\n");
         }
 
         if (sb.length() > INDEX_MAX_BYTES) {

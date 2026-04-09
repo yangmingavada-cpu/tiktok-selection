@@ -662,7 +662,8 @@ public class BlockOrchestrator {
                 }
             }
 
-            String name = "步骤" + seq + "-" + label;
+            String hashSuffix = chainHash != null ? "-" + chainHash : "";
+            String name = "执行-步骤" + seq + "-" + label + hashSuffix;
             memoryFileService.writeMemory(userId, sessionId, "session", "project",
                     name, description, content.toString(), "main", "执行", chainHash);
 

@@ -215,12 +215,18 @@ class MemoryAgent:
                 except Exception:
                     tool_result = {"raw": tool_result}
 
-            # 提取关键信息
+            # 跳过失败的工具调用（不写入记忆）
             success = tool_result.get("success", True)
+            if not success:
+                logger.debug("Skipping failed tool result: %s", tool_name)
+                return
+
             data_count = tool_result.get("chain_length") or tool_result.get("outputCount") or ""
             message = tool_result.get("message", "")
 
-            name = f"{phase}-{tool_name}"
+            # 文件名加 chainHash 后缀，避免多轮调整覆盖
+            hash_suffix = f"-{block_chain_hash}" if block_chain_hash else ""
+            name = f"{phase}-{tool_name}{hash_suffix}"
             desc_parts = [phase]
             if block_chain_hash:
                 desc_parts.append(f"chain:{block_chain_hash}")
