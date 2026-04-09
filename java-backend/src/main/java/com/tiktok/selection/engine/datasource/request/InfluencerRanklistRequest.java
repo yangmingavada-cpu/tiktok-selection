@@ -22,10 +22,20 @@ public class InfluencerRanklistRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "influencer_id", "nickname", "region",
-        "influencer_category_name",
-        "total_followers_cnt", "total_sale_cnt", "total_sale_gmv_amt",
-        "rank_position"
+        "user_id", "unique_id", "nick_name", "region",
+        "category", "ec_score", "sales_flag",
+        // 榜单周期内增量
+        "total_followers_cnt", "total_digg_cnt",
+        "total_post_video_cnt", "total_live_cnt",
+        "total_sale_cnt", "total_sale_gmv_amt",
+        "total_product_cnt",
+        // 历史总量
+        "total_followers_history_cnt", "total_digg_history_cnt",
+        "total_post_video_history_cnt", "total_live_history_cnt",
+        "total_sale_history_cnt", "total_sale_gmv_history_amt",
+        "total_product_history_cnt",
+        // 品类
+        "most_category_id", "product_category_list"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

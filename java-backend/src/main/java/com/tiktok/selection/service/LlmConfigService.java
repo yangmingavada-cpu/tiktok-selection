@@ -73,6 +73,9 @@ public class LlmConfigService {
         map.put("api_key", decryptedApiKey);
         map.put("model", config.getModel());
         map.put("max_tokens", config.getMaxTokens() != null ? config.getMaxTokens() : 4096);
+        map.put("context_window", config.getContextWindow() != null ? config.getContextWindow() : 128000);
+        map.put("compact_message_limit", config.getCompactMessageLimit() != null ? config.getCompactMessageLimit() : 48);
+        map.put("compact_char_limit", config.getCompactCharLimit() != null ? config.getCompactCharLimit() : 18000);
         if (config.getConfigExtra() != null) {
             map.put("config_extra", config.getConfigExtra());
         }

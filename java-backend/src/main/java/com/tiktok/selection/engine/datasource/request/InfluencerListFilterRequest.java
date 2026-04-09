@@ -22,14 +22,34 @@ public class InfluencerListFilterRequest {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public static final List<String> OUTPUT_FIELDS = List.of(
-        "influencer_id", "nickname", "region",
-        "gender", "influencer_language",
-        "total_followers_cnt", "total_followers_30d_cnt",
-        "total_post_video_cnt", "per_views_avg_cnt",
-        "interaction_rate", "total_product_cnt",
-        "total_digg_cnt", "total_views_cnt", "total_views_7d_cnt",
-        "per_video_product_views_avg_cnt", "per_video_product_views_avg_7d_cnt",
-        "sales_flag", "show_case_flag"
+        // 基础信息
+        "user_id", "unique_id", "nick_name", "region",
+        "category", "language", "gender",
+        "ec_score", "interaction_rate",
+        "sales_flag", "show_case_flag",
+        "seller_id", "off_mark", "first_crawl_dt",
+        // 粉丝
+        "total_followers_cnt",
+        "total_followers_1d_cnt", "total_followers_7d_cnt",
+        "total_followers_30d_cnt", "total_followers_90d_cnt",
+        "total_following_cnt",
+        // 互动
+        "total_digg_cnt",
+        "total_digg_1d_cnt", "total_digg_7d_cnt",
+        "total_digg_30d_cnt", "total_digg_90d_cnt",
+        "total_views_cnt",
+        "total_shares_cnt", "total_comments_cnt",
+        // 内容
+        "total_post_video_cnt", "total_live_cnt",
+        // 带货
+        "total_sale_cnt", "total_sale_gmv_amt",
+        "total_sale_gmv_30d_amt",
+        "total_video_sale_30d_cnt", "total_video_sale_gmv_30d_amt",
+        "total_live_sale_gmv_30d_amt",
+        "total_product_cnt", "total_product_30d_cnt",
+        "total_video_product_30d_cnt",
+        "avg_30d_price",
+        "per_video_product_views_avg_7d_cnt"
     );
 
     @McpParam(desc = "目标市场地区代码", required = true,

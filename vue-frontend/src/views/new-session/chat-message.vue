@@ -16,6 +16,7 @@ const emit = defineEmits<{
   confirmPlan: [plan: unknown[], sourceText?: string]
   confirmDraft: []
   rejectDraft: []
+  applyAuditSuggestions: [text: string]
 }>()
 
 function renderMd(text: string): string {
@@ -129,6 +130,35 @@ function isPreviewEmpty(preview: ChatMessage['preview']): boolean {
           </div>
 
           <div v-if="msg.execCard.errorMsg" class="exec-error">{{ msg.execCard.errorMsg }}</div>
+
+          <div v-if="msg.execCard.auditResult" class="exec-audit">
+            <div class="exec-audit-header">
+              审计报告
+              <span :class="['exec-audit-tag', msg.execCard.auditResult.pass ? 'pass' : 'fail']">
+                {{ msg.execCard.auditResult.pass ? '通过' : '未通过' }} · {{ msg.execCard.auditResult.score }}分
+              </span>
+            </div>
+            <div v-if="msg.execCard.auditResult.issues?.length" class="exec-audit-section">
+              <div class="exec-audit-label">问题</div>
+              <ul>
+                <li v-for="(issue, i) in msg.execCard.auditResult.issues" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
+            <div v-if="msg.execCard.auditResult.suggestions?.length" class="exec-audit-section">
+              <div class="exec-audit-label">建议</div>
+              <ul>
+                <li v-for="(s, i) in msg.execCard.auditResult.suggestions" :key="i">{{ s }}</li>
+              </ul>
+            </div>
+            <div v-if="!msg.execCard.auditResult.pass && msg.execCard.auditResult.suggestions?.length" class="exec-audit-action">
+              <button
+                class="exec-audit-btn"
+                @click="emit('applyAuditSuggestions', '请按照审计建议修改方案：\n' + msg.execCard.auditResult.suggestions.join('\n'))"
+              >
+                按建议修改
+              </button>
+            </div>
+          </div>
 
           <div v-if="msg.execCard.status === 'completed' || msg.execCard.status === 'paused'" class="exec-card-footer">
             <router-link :to="{ name: 'SessionDetail', params: { id: msg.execCard.id } }" class="exec-view-link">
@@ -303,6 +333,42 @@ function isPreviewEmpty(preview: ChatMessage['preview']): boolean {
   color: #dc2626;
   font-size: 12px;
 }
+.exec-audit {
+  padding: 10px 14px;
+  border-top: 1px solid #f0f0f0;
+  font-size: 13px;
+}
+.exec-audit-header {
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.exec-audit-tag {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+.exec-audit-tag.pass { background: #dcfce7; color: #16a34a; }
+.exec-audit-tag.fail { background: #fee2e2; color: #dc2626; }
+.exec-audit-section { margin-top: 4px; }
+.exec-audit-label { font-weight: 500; color: #6b7280; margin-bottom: 2px; }
+.exec-audit-section ul { margin: 2px 0 0 16px; padding: 0; }
+.exec-audit-section li { margin: 2px 0; color: #374151; line-height: 1.5; }
+.exec-audit-action { margin-top: 8px; }
+.exec-audit-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #fff;
+  background: #6366f1;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.exec-audit-btn:hover { background: #4f46e5; }
+
 .exec-card-footer {
   padding: 10px 14px;
   border-top: 1px solid #f0f0f0;

@@ -35,15 +35,15 @@ public class SelectSourceHelper {
 
     // ==================== 品类映射 ====================
 
-    public record CategoryMappingResult(String categoryId, boolean ambiguous, List<String> candidates) {
-        static CategoryMappingResult found(String id) {
-            return new CategoryMappingResult(id, false, List.of());
+    public record CategoryMappingResult(String categoryId, int level, String parentId, boolean ambiguous, List<String> candidates) {
+        static CategoryMappingResult found(EchotikCategory cat) {
+            return new CategoryMappingResult(cat.getCategoryId(), cat.getLevel(), cat.getParentId(), false, List.of());
         }
         static CategoryMappingResult ambiguous(List<String> candidates) {
-            return new CategoryMappingResult(null, true, candidates);
+            return new CategoryMappingResult(null, 0, null, true, candidates);
         }
         static CategoryMappingResult notFound() {
-            return new CategoryMappingResult(null, false, List.of());
+            return new CategoryMappingResult(null, 0, null, false, List.of());
         }
     }
 
@@ -55,12 +55,43 @@ public class SelectSourceHelper {
      */
     public String applyCategory(Map<String, Object> config, Map<String, Object> args,
                                  String region, String configKey) {
+        return applyCategory(config, args, region, configKey, false);
+    }
+
+    /**
+     * @param forceLevel1 true 时，L2/L3 品类自动转为 L1 祖先（适用于只支持一级品类的 API，如 influencer/list）
+     */
+    public String applyCategory(Map<String, Object> config, Map<String, Object> args,
+                                 String region, String configKey, boolean forceLevel1) {
         String categoryKw = (String) args.get("category");
         if (categoryKw == null) return null;
 
         CategoryMappingResult cat = mapCategory(categoryKw, region);
         if (cat.categoryId() != null) {
-            config.put(configKey, cat.categoryId());
+            if (forceLevel1 && cat.level() > 1) {
+                // API 只支持一级品类，自动查找 L1 祖先
+                String l1Id = findLevel1Ancestor(cat.categoryId(), cat.level(), cat.parentId(), region);
+                config.put(configKey, l1Id != null ? l1Id : cat.categoryId());
+            } else if ("category_id".equals(configKey)) {
+                // product 系列：category_id(L1) / category_l2_id(L2) / category_l3_id(L3)
+                switch (cat.level()) {
+                    case 2 -> {
+                        config.put("category_l2_id", cat.categoryId());
+                        if (cat.parentId() != null) config.put("category_id", cat.parentId());
+                    }
+                    case 3 -> {
+                        config.put("category_l3_id", cat.categoryId());
+                        if (cat.parentId() != null) {
+                            config.put("category_l2_id", cat.parentId());
+                            fillGrandparentCategory(config, cat.parentId(), region);
+                        }
+                    }
+                    default -> config.put("category_id", cat.categoryId());
+                }
+            } else {
+                // 达人榜单等支持任意级别的 API，直接用原 ID
+                config.put(configKey, cat.categoryId());
+            }
             return null;
         } else if (cat.ambiguous()) {
             return "品类'" + categoryKw + "'匹配到多个结果: " + cat.candidates()
@@ -71,6 +102,31 @@ public class SelectSourceHelper {
         }
     }
 
+    /** 查找品类的 L1 祖先 ID */
+    private String findLevel1Ancestor(String categoryId, int level, String parentId, String region) {
+        if (level == 2) return parentId;  // L2 的 parent 就是 L1
+        if (level == 3 && parentId != null) {
+            // L3 → 查 L2 parent → 拿 L1
+            EchotikCategory l2 = categoryMapper.selectOne(
+                    new LambdaQueryWrapper<EchotikCategory>()
+                            .eq(EchotikCategory::getCategoryId, parentId)
+                            .eq(EchotikCategory::getRegion, region));
+            return (l2 != null) ? l2.getParentId() : null;
+        }
+        return categoryId;  // level=1 直接返回自身
+    }
+
+    /** L3 品类时，查找 L2 父级的 parentId（即 L1 品类 ID）并写入 config */
+    private void fillGrandparentCategory(Map<String, Object> config, String l2CategoryId, String region) {
+        EchotikCategory l2 = categoryMapper.selectOne(
+                new LambdaQueryWrapper<EchotikCategory>()
+                        .eq(EchotikCategory::getCategoryId, l2CategoryId)
+                        .eq(EchotikCategory::getRegion, region));
+        if (l2 != null && l2.getParentId() != null) {
+            config.put("category_id", l2.getParentId());
+        }
+    }
+
     private CategoryMappingResult mapCategory(String keyword, String region) {
         List<EchotikCategory> exact = categoryMapper.selectList(
                 new LambdaQueryWrapper<EchotikCategory>()
@@ -78,7 +134,7 @@ public class SelectSourceHelper {
                         .and(w -> w.eq(EchotikCategory::getNameZh, keyword)
                                 .or().eq(EchotikCategory::getNameEn, keyword)));
         if (exact.size() == 1) {
-            return CategoryMappingResult.found(exact.get(0).getCategoryId());
+            return CategoryMappingResult.found(exact.get(0));
         }
         List<EchotikCategory> fuzzy = categoryMapper.selectList(
                 new LambdaQueryWrapper<EchotikCategory>()
@@ -87,7 +143,7 @@ public class SelectSourceHelper {
                                 .or().like(EchotikCategory::getNameEn, keyword))
                         .last("LIMIT 5"));
         if (fuzzy.size() == 1) {
-            return CategoryMappingResult.found(fuzzy.get(0).getCategoryId());
+            return CategoryMappingResult.found(fuzzy.get(0));
         } else if (fuzzy.size() > 1) {
             List<String> candidates = fuzzy.stream()
                     .map(c -> c.getNameZh() + "(" + c.getCategoryId() + ")").toList();

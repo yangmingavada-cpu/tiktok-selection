@@ -51,6 +51,12 @@ export interface ExecSession {
   dims: { id: string; label: string; type: string }[]
   totalRows: number
   errorMsg: string | null
+  auditResult?: {
+    pass: boolean
+    score: number
+    issues: string[]
+    suggestions: string[]
+  }
 }
 
 export interface AskDialogState {

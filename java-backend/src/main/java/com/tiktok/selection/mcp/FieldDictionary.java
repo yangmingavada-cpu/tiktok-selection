@@ -188,7 +188,8 @@ public final class FieldDictionary {
 
             // 互动
             "total_digg_cnt",
-            "total_digg_7d_cnt", "total_digg_30d_cnt",
+            "total_digg_1d_cnt", "total_digg_7d_cnt",
+            "total_digg_30d_cnt", "total_digg_90d_cnt",
             "total_views_cnt",
             "total_shares_cnt", "total_comments_cnt",
 
@@ -200,8 +201,16 @@ public final class FieldDictionary {
             "total_video_sale_30d_cnt", "total_video_sale_gmv_30d_amt",
             "total_live_sale_gmv_30d_amt",
             "total_product_cnt", "total_product_30d_cnt",
+            "total_video_product_30d_cnt",
             "avg_30d_price",
-            "per_video_product_views_avg_7d_cnt"
+            "per_video_product_views_avg_7d_cnt",
+
+            // 榜单特有（历史总量）
+            "total_followers_history_cnt", "total_digg_history_cnt",
+            "total_post_video_history_cnt", "total_live_history_cnt",
+            "total_sale_history_cnt", "total_sale_gmv_history_amt",
+            "total_product_history_cnt",
+            "most_category_id", "product_category_list"
     );
 
     public static final Map<String, String> INFLUENCER_FIELD_DESC = Map.ofEntries(
@@ -219,30 +228,43 @@ public final class FieldDictionary {
             Map.entry("seller_id",                       "关联小店ID"),
             Map.entry("off_mark",                        "是否注销(0=正常,>0=可能已注销)"),
             Map.entry("first_crawl_dt",                  "首次采集时间"),
-            Map.entry("total_followers_cnt",             "总粉丝数"),
+            Map.entry("total_followers_cnt",             "总粉丝数（榜单中为周期内粉丝增量）"),
             Map.entry("total_followers_1d_cnt",          "近1日粉丝增量"),
             Map.entry("total_followers_7d_cnt",          "近7日粉丝增量"),
             Map.entry("total_followers_30d_cnt",         "近30日粉丝增量"),
             Map.entry("total_followers_90d_cnt",         "近90日粉丝增量"),
             Map.entry("total_following_cnt",             "关注数"),
-            Map.entry("total_digg_cnt",                  "总点赞量"),
+            Map.entry("total_digg_cnt",                  "总点赞量（榜单中为周期内点赞增量）"),
+            Map.entry("total_digg_1d_cnt",               "近1日点赞增量"),
             Map.entry("total_digg_7d_cnt",               "近7日点赞增量"),
             Map.entry("total_digg_30d_cnt",              "近30日点赞增量"),
+            Map.entry("total_digg_90d_cnt",              "近90日点赞增量"),
             Map.entry("total_views_cnt",                 "总播放量"),
             Map.entry("total_shares_cnt",                "总分享量"),
             Map.entry("total_comments_cnt",              "总评论量"),
-            Map.entry("total_post_video_cnt",            "总发布视频数"),
-            Map.entry("total_live_cnt",                  "总直播数"),
-            Map.entry("total_sale_cnt",                  "总带货销量(预估)"),
-            Map.entry("total_sale_gmv_amt",              "总带货GMV(预估,USD)"),
+            Map.entry("total_post_video_cnt",            "总发布视频数（榜单中为周期内发布量）"),
+            Map.entry("total_live_cnt",                  "总直播数（榜单中为周期内直播量）"),
+            Map.entry("total_sale_cnt",                  "总带货销量(预估)（榜单中为周期内销量）"),
+            Map.entry("total_sale_gmv_amt",              "总带货GMV(预估,USD)（榜单中为周期内销售额）"),
             Map.entry("total_sale_gmv_30d_amt",          "近30日带货GMV(预估,USD)"),
             Map.entry("total_video_sale_30d_cnt",        "近30日视频带货销量(预估)"),
             Map.entry("total_video_sale_gmv_30d_amt",    "近30日视频带货GMV(预估,USD)"),
             Map.entry("total_live_sale_gmv_30d_amt",     "近30日直播带货GMV(预估,USD)"),
-            Map.entry("total_product_cnt",               "总带货商品数"),
+            Map.entry("total_product_cnt",               "总带货商品数（榜单中为周期内带货商品量）"),
             Map.entry("total_product_30d_cnt",           "近30日带货商品数"),
+            Map.entry("total_video_product_30d_cnt",     "近30日视频带货商品数"),
             Map.entry("avg_30d_price",                   "近30日带货商品均价(USD)"),
-            Map.entry("per_video_product_views_avg_7d_cnt", "近7日带货视频平均播放量")
+            Map.entry("per_video_product_views_avg_7d_cnt", "近7日带货视频平均播放量"),
+            // 榜单特有字段
+            Map.entry("total_followers_history_cnt",     "粉丝数总量（榜单）"),
+            Map.entry("total_digg_history_cnt",          "点赞总量（榜单）"),
+            Map.entry("total_post_video_history_cnt",    "发布视频数总量（榜单）"),
+            Map.entry("total_live_history_cnt",          "直播数总量（榜单）"),
+            Map.entry("total_sale_history_cnt",          "总销量(预估,榜单)"),
+            Map.entry("total_sale_gmv_history_amt",      "总销售额(预估,USD,榜单)"),
+            Map.entry("total_product_history_cnt",       "带货商品数总量（榜单）"),
+            Map.entry("most_category_id",                "带货最多的一级品类ID（榜单）"),
+            Map.entry("product_category_list",           "达人所有带货类目（榜单）")
     );
 
     // ==================== 视频字段（23个）====================

@@ -57,7 +57,13 @@ public class SelectInfluencerSourceTool implements McpTool {
                         prop("source_type", "string", "达人数据源类型",
                                 List.of(INFLUENCER_LISTING, INFLUENCER_RANKING)),
                         prop("region", "string", "目标市场地区代码", REGIONS),
-                        propOpt("category", "string", "达人分类关键词，如'美妆'、'家居'"),
+                        propOpt("category", "string",
+                                "商品品类关键词（如'美妆'、'家居'），Server自动匹配为商品品类ID，用于筛选带货该品类的达人"),
+                        propOpt("influencer_category", "string",
+                                "达人自身分类名称（如'Beauty'、'Food & Cooking'、'Life Style'），"
+                                + "枚举：Beauty/Food & Cooking/Health & Wellness/Clothing & Accessories/"
+                                + "Home, Furniture & Appliances/Sports, Fitness & Outdoors/Gaming/"
+                                + "Music & Dance/Personal Blog/Education & Training/Pets/Animals & Nature等"),
                         propOpt("ranking_type", "string",
                                 "榜单类型，influencer_ranking时必填：fans=粉丝榜，hot_sale=带货榜",
                                 List.of("fans", "hot_sale")),
@@ -99,8 +105,15 @@ public class SelectInfluencerSourceTool implements McpTool {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("region", regionUp);
 
-        // 品类：达人类 Request 使用 product_category_id（达人带货的商品品类）
-        String hint = helper.applyCategory(config, args, regionUp, "product_category_id");
+        // 商品品类：达人榜单支持任意级别，达人列表只支持一级品类
+        boolean forceL1 = INFLUENCER_LISTING.equals(sourceType);
+        String hint = helper.applyCategory(config, args, regionUp, "product_category_id", forceL1);
+
+        // 达人自身分类
+        String influencerCat = (String) args.get("influencer_category");
+        if (influencerCat != null) {
+            config.put("influencer_category_name", influencerCat);
+        }
 
         if (INFLUENCER_RANKING.equals(sourceType)) {
             Object rawDateList = args.get("ranking_date_list");

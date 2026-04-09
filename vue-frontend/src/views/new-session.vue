@@ -38,6 +38,7 @@
             @confirm-plan="confirmPlan"
             @confirm-draft="handleConfirmDraft"
             @reject-draft="handleRejectDraft"
+            @apply-audit-suggestions="submitPrompt"
           />
 
           <OnboardingGuide
@@ -53,7 +54,7 @@
             :steps="steps"
             :thinking-text="thinkingText"
             :trace-entries="planningTrace"
-            :session-id="planningSessionId"
+            :session-id="planningAgentThreadId || planningSessionId"
           />
 
           <!-- AI 思考中 -->
@@ -295,6 +296,10 @@ function applyResultCurrentView(detail: ApiSession) {
   } else if (target.status === 'completed' || target.status === 'paused') {
     target.dataState = 'pending'
   }
+
+  if (detail.auditResult) {
+    target.auditResult = detail.auditResult
+  }
 }
 
 async function syncResultSession(sessionId: string) {
@@ -454,16 +459,19 @@ function finishPlanning() {
 }
 
 function resetPlanningThread() {
+  console.log('[Thread] resetPlanningThread: planningThreadId cleared, agentThreadId preserved =', planningAgentThreadId.value)
   planningThreadId.value = ''
   // agentThreadId 和 conversationSummary 不清空，保证整个对话生命周期内可续接
   // 只有 resetConversation()（新建对话）才会全部清空
 }
 
 function updatePlanningThreadMeta(data?: { agentThreadId?: string; conversationSummary?: string }) {
+  const prev = planningAgentThreadId.value
   if (data?.agentThreadId) planningAgentThreadId.value = data.agentThreadId
   if (typeof data?.conversationSummary === 'string') {
     planningConversationSummary.value = data.conversationSummary
   }
+  console.log('[Thread] updatePlanningThreadMeta:', { prev, new: planningAgentThreadId.value, fromResponse: data?.agentThreadId })
 }
 
 function schedulePlanningGuard(sessionId: string) {
@@ -581,6 +589,7 @@ function handlePlanResult(data: { blockChain: Block[]; summary?: string; llmToke
   const savedAgentThreadId = planningAgentThreadId.value
   lastPlanThreadId.value = savedThreadId
   lastPlanAgentThreadId.value = savedAgentThreadId
+  console.log('[handlePlanResult] saved threads:', { planningThreadId: savedThreadId, agentThreadId: savedAgentThreadId })
 
   resetPlanningThread()
   lastBlockChain.value = data.blockChain
@@ -659,17 +668,21 @@ async function submitPrompt(rawText: string) {
   planningThreadId.value = buildSessionId
   startPlanning(buildSessionId)
 
+  const sentAgentThreadId = planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined
+  console.log('[submitPrompt] sending:', { buildSessionId, agentThreadId: sentAgentThreadId, hasBlockChain: !!lastBlockChain.value, qaHistoryLen: qaHistory.value.length })
+
   try {
   const contextText = buildContextText(text)
   const res = await parseIntent({
       userText: contextText,
       buildSessionId,
-      agentThreadId: planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined,
+      agentThreadId: sentAgentThreadId,
       conversationSummary: planningConversationSummary.value || undefined,
       sessionContext: lastBlockChain.value ? { blockChain: lastBlockChain.value } : undefined,
       qaHistory: qaHistory.value.length > 0 ? qaHistory.value : undefined,
     })
     const data = res.data
+    console.log('[submitPrompt] response:', { type: data?.type, success: data?.success, agentThreadId: data?.agentThreadId, hasBlockChain: !!data?.blockChain?.length })
 
     if (data?.type === 'plan_draft' && data.plan) {
       updatePlanningThreadMeta(data)
@@ -685,7 +698,14 @@ async function submitPrompt(rawText: string) {
     if (data?.success && data?.blockChain?.length) {
       updatePlanningThreadMeta(data)
       handlePlanResult({ blockChain: data.blockChain, summary: data.summary, llmTokensUsed: data.llmTokensUsed }, text)
+    } else if (data?.success && data?.message) {
+      // Type A 回复：AI 用文字回答问题，没有返回 blockChain（不是失败）
+      console.log('[submitPrompt] text response (Type A):', data.message.substring(0, 80))
+      updatePlanningThreadMeta(data)
+      finishPlanning()
+      addMessage({ role: 'ai', text: data.message })
     } else {
+      console.warn('[submitPrompt] no blockChain, treating as failed:', data?.message)
       planningStatus.value = 'failed'
       originalRequest.value = ''
       resetPlanningThread()
@@ -695,6 +715,7 @@ async function submitPrompt(rawText: string) {
       finishPlanning()
     }
   } catch {
+    console.error('[submitPrompt] request failed')
     planningStatus.value = 'failed'
     originalRequest.value = ''
     resetPlanningThread()
@@ -741,11 +762,14 @@ async function sendAskReply(answer: string) {
   planningThreadId.value = buildSessionId
   startPlanning(buildSessionId)
 
+  const sentAgentThreadId = planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined
+  console.log('[sendAskReply] sending:', { buildSessionId, agentThreadId: sentAgentThreadId, answer: answer.substring(0, 50) })
+
   try {
   const res = await parseIntent({
-      userText: originalRequest.value || answer,
+      userText: answer,
       buildSessionId,
-      agentThreadId: planningAgentThreadId.value || lastPlanAgentThreadId.value || undefined,
+      agentThreadId: sentAgentThreadId,
       conversationSummary: planningConversationSummary.value || undefined,
       qaHistory: qaHistory.value,
       sessionContext: lastBlockChain.value ? { blockChain: lastBlockChain.value } : undefined,
@@ -766,6 +790,12 @@ async function sendAskReply(answer: string) {
     if (data?.success && data?.blockChain?.length) {
       updatePlanningThreadMeta(data)
       handlePlanResult({ blockChain: data.blockChain, summary: data.summary, llmTokensUsed: data.llmTokensUsed }, originalRequest.value || answer)
+    } else if (data?.success && data?.message) {
+      // Type A 回复：AI 用文字回答问题
+      console.log('[sendAskReply] text response (Type A):', data.message.substring(0, 80))
+      updatePlanningThreadMeta(data)
+      finishPlanning()
+      addMessage({ role: 'ai', text: data.message })
     } else {
       planningStatus.value = 'failed'
       qaHistory.value = []
@@ -821,6 +851,7 @@ function rejectPlan() {
 void rejectPlan
 
 function rejectPlanWithGuide() {
+  console.log('[rejectPlanWithGuide] agentThreadId preserved:', planningAgentThreadId.value, 'lastPlan:', lastPlanAgentThreadId.value)
   const adjustingPendingPlan = pendingPlan.value
   pendingPlan.value = false
   qaHistory.value = []
@@ -858,6 +889,7 @@ function rejectPlanWithGuide() {
 }
 
 async function confirmPlan(plan: unknown[], sourceText?: string) {
+  console.log('[confirmPlan] agentThreadId:', planningAgentThreadId.value || lastPlanAgentThreadId.value)
   creating.value = true
   try {
     const titleSrc = sourceText || originalRequest.value || ''

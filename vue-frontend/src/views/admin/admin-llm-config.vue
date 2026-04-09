@@ -59,6 +59,18 @@
         <el-form-item label="最大Token">
           <el-input-number v-model="form.maxTokens" :min="1" :max="128000" />
         </el-form-item>
+        <el-form-item label="上下文窗口">
+          <el-input-number v-model="form.contextWindow" :min="1000" :max="2000000" :step="1000" />
+          <span class="form-tip">模型上下文窗口长度（token）</span>
+        </el-form-item>
+        <el-form-item label="压缩消息数">
+          <el-input-number v-model="form.compactMessageLimit" :min="10" :max="500" />
+          <span class="form-tip">消息数超此值触发压缩</span>
+        </el-form-item>
+        <el-form-item label="压缩字符数">
+          <el-input-number v-model="form.compactCharLimit" :min="5000" :max="500000" :step="1000" />
+          <span class="form-tip">消息总字符超此值触发压缩</span>
+        </el-form-item>
         <el-form-item label="优先级">
           <el-input-number v-model="form.priority" :min="1" />
           <span class="form-tip">数值越小优先级越高</span>
@@ -85,7 +97,9 @@ import type { LlmConfig, LlmConfigForm } from '@/types'
 
 const DEFAULT_FORM = (): LlmConfigForm => ({
   name: '', provider: 'openai', baseUrl: '', apiKey: '',
-  model: '', maxTokens: 4096, priority: 1, active: true,
+  model: '', maxTokens: 4096, contextWindow: 128000,
+  compactMessageLimit: 48, compactCharLimit: 18000,
+  priority: 1, active: true,
 })
 
 const {

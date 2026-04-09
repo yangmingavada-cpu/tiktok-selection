@@ -282,6 +282,9 @@ CREATE TABLE IF NOT EXISTS db_platform.llm_config (
     monthly_token_limit BIGINT NOT NULL DEFAULT -1,
     monthly_tokens_used BIGINT NOT NULL DEFAULT 0,
     config_extra        JSONB DEFAULT NULL,
+    context_window      INTEGER NOT NULL DEFAULT 128000,
+    compact_message_limit INTEGER NOT NULL DEFAULT 48,
+    compact_char_limit  INTEGER NOT NULL DEFAULT 18000,
     create_time         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     update_time         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id)

@@ -34,6 +34,10 @@ public class LlmConfig {
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> configExtra;
 
+    private Integer contextWindow;
+    private Integer compactMessageLimit;
+    private Integer compactCharLimit;
+
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

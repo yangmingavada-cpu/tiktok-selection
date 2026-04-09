@@ -57,7 +57,7 @@ public class SelectProductSourceTool implements McpTool {
                                 List.of(PRODUCT_LISTING, PRODUCT_RANKING)),
                         prop("region", "string", "目标市场地区代码", REGIONS),
                         propOpt("category", "string",
-                                "品类关键词（如'家居'、'服装'），Server自动模糊匹配为category_id；product_listing/product_ranking适用"),
+                                "品类关键词（如'家居'、'美妆'、'护肤'），Server自动匹配为对应品类参数，支持一二三级品类"),
                         propOpt("price_min", "number", "最低价格(USD)"),
                         propOpt("price_max", "number", "最高价格(USD)"),
                         propOpt("ranking_type", "string", "榜单类型，product_ranking时必填",

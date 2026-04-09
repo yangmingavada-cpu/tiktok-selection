@@ -231,9 +231,11 @@ public class MemoryFileService {
         return Math.max(1, getNextSeq(userId, sessionId) - 1);
     }
 
-    private static final int    INDEX_MAX_ROWS    = 200;
-    private static final int    INDEX_MAX_BYTES   = 25_000;
-    private static final int    INDEX_MAX_LINE    = 150;
+    private static final int    INDEX_MAX_ROWS         = 200;
+    private static final int    INDEX_MAX_BYTES        = 25_000;
+    private static final int    INDEX_MAX_LINE         = 150;
+    private static final int    SESSION_PROFILE_MAX    = 30;
+    private static final int    COMMON_PROFILE_MAX     = 50;
 
     private void regenerateIndex(String userId, String sessionId, String scope) throws IOException {
         LambdaQueryWrapper<UserMemoryFile> wrapper = Wrappers.lambdaQuery(UserMemoryFile.class)
@@ -246,10 +248,40 @@ public class MemoryFileService {
         }
         wrapper.orderByAsc(UserMemoryFile::getSeq);
 
-        List<UserMemoryFile> records = memoryFileMapper.selectList(wrapper);
+        List<UserMemoryFile> records = new ArrayList<>(memoryFileMapper.selectList(wrapper));
 
-        if (records.size() > INDEX_MAX_ROWS) {
-            records = records.subList(records.size() - INDEX_MAX_ROWS, records.size());
+        // ── 清理：有 chainHash 的记忆超 INDEX_MAX_ROWS 条 → 按时间删最早的 chainHash 组 ──
+        List<UserMemoryFile> chainedRecords = records.stream()
+                .filter(r -> r.getBlockChainHash() != null).collect(Collectors.toList());
+        if (chainedRecords.size() > INDEX_MAX_ROWS) {
+            // 收集 chainHash 出现顺序（seq asc = 时间顺序）
+            List<String> chainOrder = new ArrayList<>();
+            for (UserMemoryFile r : chainedRecords) {
+                String hash = r.getBlockChainHash();
+                if (!chainOrder.contains(hash)) {
+                    chainOrder.add(hash);
+                }
+            }
+            List<UserMemoryFile> toDelete = new ArrayList<>();
+            for (String hash : chainOrder) {
+                if (chainedRecords.size() - toDelete.size() <= INDEX_MAX_ROWS) break;
+                List<UserMemoryFile> group = chainedRecords.stream()
+                        .filter(r -> hash.equals(r.getBlockChainHash())).toList();
+                toDelete.addAll(group);
+            }
+            purgeMemoryFiles(toDelete);
+            records.removeAll(toDelete);
+        }
+
+        // ── 清理：用户画像（chainHash=null）超阈值 → 按 seq 删最早的 ──
+        int profileMax = "common".equals(scope) ? COMMON_PROFILE_MAX : SESSION_PROFILE_MAX;
+        List<UserMemoryFile> profileRecords = records.stream()
+                .filter(r -> r.getBlockChainHash() == null).collect(Collectors.toList());
+        if (profileRecords.size() > profileMax) {
+            List<UserMemoryFile> profileToDelete = new ArrayList<>(
+                    profileRecords.subList(0, profileRecords.size() - profileMax));
+            purgeMemoryFiles(profileToDelete);
+            records.removeAll(profileToDelete);
         }
 
         StringBuilder sb = new StringBuilder();
@@ -268,9 +300,6 @@ public class MemoryFileService {
         sb.append("- 用户询问预览/验证数据 → 查看带「规划」标签的条目\n");
         sb.append("- 用户询问真实执行数据 → 查看带「执行」标签的条目\n");
         sb.append("- 调用 query_memory 工具读取具体 md 文件获取完整内容\n\n");
-        sb.append("### 清理规则\n");
-        sb.append("- 索引超过 200 条时，按创建时间删除最早的整个 chainHash 分组\n");
-        sb.append("- 用户画像(common)记忆不参与清理\n\n");
         sb.append("---\n\n");
 
         // 按 chainHash 分组，null hash 归入用户画像
@@ -325,6 +354,26 @@ public class MemoryFileService {
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
         upsertRecord(userId, sessionId, indexRelPath, "index", "MEMORY", "该 scope 的记忆索引文件", "system", null, null);
+    }
+
+    /**
+     * 三层清理：DB 记录 + 磁盘 .md 文件。
+     */
+    private void purgeMemoryFiles(List<UserMemoryFile> toDelete) {
+        if (toDelete.isEmpty()) return;
+        // ① DB 删除
+        List<String> ids = toDelete.stream().map(UserMemoryFile::getId).toList();
+        memoryFileMapper.deleteBatchIds(ids);
+        // ② 磁盘删除
+        for (UserMemoryFile r : toDelete) {
+            try {
+                Path filePath = Paths.get(memoryRoot).resolve(r.getFilePath()).normalize();
+                Files.deleteIfExists(filePath);
+            } catch (Exception e) {
+                log.warn("清理记忆文件失败: {}", r.getFilePath(), e);
+            }
+        }
+        log.info("清理记忆文件 {} 条", toDelete.size());
     }
 
     /**

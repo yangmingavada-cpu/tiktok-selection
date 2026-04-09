@@ -7,4 +7,7 @@ class LlmConfig(BaseModel):
     api_key: str = ""
     model: str = "gpt-4o-mini"
     max_tokens: int = 4096
+    context_window: int = 128000
+    compact_message_limit: int = 48
+    compact_char_limit: int = 18000
     config_extra: dict | None = None

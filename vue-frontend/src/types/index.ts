@@ -242,6 +242,9 @@ export interface LlmConfig {
   apiKeyMasked: string
   model: string
   maxTokens: number
+  contextWindow: number
+  compactMessageLimit: number
+  compactCharLimit: number
   priority: number
   active: boolean
 }
@@ -253,6 +256,9 @@ export interface LlmConfigForm {
   apiKey: string
   model: string
   maxTokens: number
+  contextWindow: number
+  compactMessageLimit: number
+  compactCharLimit: number
   priority: number
   active: boolean
 }
