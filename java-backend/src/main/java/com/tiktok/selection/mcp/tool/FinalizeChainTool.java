@@ -71,15 +71,16 @@ public class FinalizeChainTool implements McpTool {
             sc00Config.put("dimensions", dimensions);
             sc00Config.put("output_field", "total_score");
 
-            // 找到第一个 SORT_TOPN 块的位置，将 SCORE_AGGREGATE 插入其前
-            // 若无 SORT_TOPN 则追加到末尾（seq 在下方统一重编号）
-            int insertIdx = blocks.size();
+            // 插入到最后一个 SCORE_NUMERIC/SCORE_SEMANTIC 之后
+            // 确保所有评分维度都已计算完再汇总（修复多实体链中的顺序错误）
+            int lastScoreIdx = -1;
             for (int i = 0; i < blocks.size(); i++) {
-                if ("SORT_TOPN".equals(blocks.get(i).get("blockId"))) {
-                    insertIdx = i;
-                    break;
+                String bid = (String) blocks.get(i).get("blockId");
+                if ("SCORE_NUMERIC".equals(bid) || "SCORE_SEMANTIC".equals(bid)) {
+                    lastScoreIdx = i;
                 }
             }
+            int insertIdx = (lastScoreIdx >= 0) ? lastScoreIdx + 1 : blocks.size();
             blocks.add(insertIdx, buildBlock(0, "SCORE_AGGREGATE", sc00Config, "评分汇总(total_score)"));
 
             if (!session.getAvailableFields().contains("total_score")) {
