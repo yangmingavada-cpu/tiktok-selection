@@ -6,21 +6,22 @@ import { ArrowLeft, Refresh, Clock, Loading, CircleCheck, CircleClose, Remove, V
 import { marked } from 'marked'
 import { useSession } from '@/composables/useSession'
 import { getStatusLabel, getStatusTagType } from '@/constants'
-import UniverSheet from '@/components/UniverSheet.vue'
+import DataGrid from '@/components/data-grid/DataGrid.vue'
+import type { ExportConfirmPayload } from '@/components/data-grid/ExportDialog.vue'
 
 const route = useRoute()
 const sessionId = computed(() => route.params.id as string)
 
-const univerSheetRef = ref<InstanceType<typeof UniverSheet>>()
-
 const {
-  session, steps, tableData, tableCols, currentView,
+  session, steps, tableData, tableCols,
+  extraCols, extraValues, isEditable,
   fetchSession, fetchSteps,
-  handleSavePlan,
+  handleSavePlan, handleExport,
+  updateCell, addExtraCol, renameExtraCol, removeExtraCol,
 } = useSession(sessionId)
 
-function handleExport() {
-  univerSheetRef.value?.exportExcel()
+async function handleDataGridExport(payload: ExportConfirmPayload) {
+  await handleExport(payload)
 }
 
 const savePlanVisible = shallowRef(false)
@@ -128,7 +129,6 @@ function formatBlockType(type: string): string {
 
       <!-- 操作按钮 -->
       <div class="top-bar-actions">
-        <el-button size="small" type="primary" plain @click="handleExport">导出 Excel</el-button>
         <el-button size="small" type="success" plain @click="savePlanVisible = true">保存方案</el-button>
       </div>
     </div>
@@ -238,21 +238,25 @@ function formatBlockType(type: string): string {
       </el-collapse-transition>
     </el-card>
 
-    <!-- 数据表格（全宽） -->
+    <!-- 数据表格（全宽，DataGrid 内部已含 toolbar） -->
     <div class="data-container">
-      <div class="data-toolbar">
-        <span v-if="tableData.length > 0" class="data-count">
-          共 <strong>{{ currentView?.totalCount ?? tableData.length }}</strong> 条结果
-        </span>
-        <span v-else class="data-count" />
-        <el-button :icon="Refresh" size="small" circle @click="refreshData" />
+      <div class="data-toolbar-mini">
+        <el-button :icon="Refresh" size="small" circle @click="refreshData" title="刷新" />
       </div>
-
       <div class="table-wrap">
-        <UniverSheet
-          ref="univerSheetRef"
+        <DataGrid
           :table-cols="tableCols"
           :table-data="tableData"
+          :extra-cols="extraCols"
+          :extra-values="extraValues"
+          :editable="isEditable"
+          :status="session.status ?? 'created'"
+          :session-id="sessionId"
+          :on-cell-edit="updateCell"
+          :on-add-extra-col="addExtraCol"
+          :on-rename-extra-col="renameExtraCol"
+          :on-remove-extra-col="removeExtraCol"
+          :on-export="handleDataGridExport"
         />
       </div>
     </div>
@@ -415,6 +419,7 @@ function formatBlockType(type: string): string {
 .step-dot-top.paused  { background: #e6a23c; }
 
 .data-container {
+  position: relative;
   flex: 1;
   border: 1px solid #e4e7ed;
   border-radius: 8px;
@@ -432,6 +437,13 @@ function formatBlockType(type: string): string {
   padding: 10px 16px;
   border-bottom: 1px solid #f0f0f0;
   flex-shrink: 0;
+}
+
+.data-toolbar-mini {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
 }
 
 .data-count {

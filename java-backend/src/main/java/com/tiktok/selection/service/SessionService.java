@@ -7,7 +7,11 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.selection.dto.ConversationSnapshot;
+import com.tiktok.selection.dto.request.ExtraColCreateRequest;
+import com.tiktok.selection.dto.request.ExtraColUpdateRequest;
+import com.tiktok.selection.dto.request.SessionCellUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCreateRequest;
+import com.tiktok.selection.dto.request.SessionExportRequest;
 import com.tiktok.selection.dto.response.SessionResponse;
 import com.tiktok.selection.entity.Session;
 import com.tiktok.selection.entity.SessionData;
@@ -27,10 +31,27 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import jakarta.servlet.http.HttpServletResponse;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * 会话服务，负责会话生命周期管理
@@ -345,6 +366,7 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
 
         if (sessionData != null) {
             response.setCurrentView(sessionData.getCurrentView());
+            response.setUserExtraCols(sessionData.getUserExtraCols());
         }
         return response;
     }
@@ -408,5 +430,558 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         }
 
         return session;
+    }
+
+    // ============================================================
+    // DataGrid 单元格编辑 + 用户增列 + 灵活导出
+    // ============================================================
+
+    /** 允许编辑的会话状态白名单 */
+    private static final Set<String> EDITABLE_STATUS = Set.of(
+            SessionStatusEnum.COMPLETED.getValue(),
+            SessionStatusEnum.PAUSED.getValue(),
+            SessionStatusEnum.FAILED.getValue(),
+            SessionStatusEnum.CANCELLED.getValue()
+    );
+
+    /**
+     * 编辑单元格（原始列或用户增列）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> updateSessionCell(String sessionId, String userId, SessionCellUpdateRequest req) {
+        Session session = checkEditableSession(sessionId, userId);
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        Map<String, Object> cv = sd.getCurrentView();
+        Map<String, Object> extra = sd.getUserExtraCols();
+
+        boolean isExtraCol = isUserExtraCol(extra, req.getField());
+        if (isExtraCol) {
+            extra = writeExtraCellValue(extra, req.getRowIndex(), req.getField(), req.getValue());
+            sd.setUserExtraCols(extra);
+        } else {
+            writeCurrentViewCell(cv, req.getRowIndex(), req.getField(), req.getValue());
+            // 不重新构造 cv，就地修改 data[rowIndex][field]，保留 outputType / dims / totalCount
+            sd.setCurrentView(cv);
+        }
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Session cell updated: sessionId={}, rowIndex={}, field={}, isExtra={}",
+                sessionId, req.getRowIndex(), req.getField(), isExtraCol);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("row", buildMergedRow(cv, extra, req.getRowIndex()));
+        result.put("updateTime", sd.getUpdateTime());
+        return result;
+    }
+
+    /**
+     * 新增一个用户增列
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> addExtraCol(String sessionId, String userId, ExtraColCreateRequest req) {
+        checkEditableSession(sessionId, userId);
+        if ("tag".equals(req.getType()) && (req.getOptions() == null || req.getOptions().isEmpty())) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "tag 类型必须提供 options");
+        }
+
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        Map<String, Object> extra = ensureExtraStructure(sd.getUserExtraCols());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+
+        String colId = "user_" + req.getType() + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 4);
+        Map<String, Object> newCol = new LinkedHashMap<>();
+        newCol.put("id", colId);
+        newCol.put("label", req.getLabel().trim());
+        newCol.put("type", req.getType());
+        if (req.getOptions() != null) {
+            newCol.put("options", req.getOptions());
+        }
+        cols.add(newCol);
+
+        sd.setUserExtraCols(extra);
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Extra col added: sessionId={}, colId={}, label={}", sessionId, colId, req.getLabel());
+        return newCol;
+    }
+
+    /**
+     * 修改用户增列（label / options）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> renameExtraCol(String sessionId, String userId, String colId, ExtraColUpdateRequest req) {
+        checkEditableSession(sessionId, userId);
+        if (!colId.startsWith("user_")) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "只能修改用户增列");
+        }
+
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        Map<String, Object> extra = sd.getUserExtraCols();
+        if (extra == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "用户增列不存在");
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+        Map<String, Object> target = null;
+        if (cols != null) {
+            for (Map<String, Object> col : cols) {
+                if (colId.equals(col.get("id"))) {
+                    target = col;
+                    break;
+                }
+            }
+        }
+        if (target == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "未找到列: " + colId);
+        }
+
+        if (StringUtils.hasText(req.getLabel())) {
+            target.put("label", req.getLabel().trim());
+        }
+        if (req.getOptions() != null) {
+            target.put("options", req.getOptions());
+        }
+
+        sd.setUserExtraCols(extra);
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Extra col renamed: sessionId={}, colId={}", sessionId, colId);
+        return target;
+    }
+
+    /**
+     * 删除用户增列（同时清理所有行的对应值）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void removeExtraCol(String sessionId, String userId, String colId) {
+        checkEditableSession(sessionId, userId);
+        if (!colId.startsWith("user_")) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "只能删除用户增列");
+        }
+
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null || sd.getUserExtraCols() == null) {
+            return;
+        }
+
+        Map<String, Object> extra = sd.getUserExtraCols();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+        if (cols != null) {
+            cols.removeIf(c -> colId.equals(c.get("id")));
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> values = (Map<String, Map<String, Object>>) extra.get("values");
+        if (values != null) {
+            for (Map<String, Object> rowMap : values.values()) {
+                rowMap.remove(colId);
+            }
+        }
+
+        sd.setUserExtraCols(extra);
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Extra col removed: sessionId={}, colId={}", sessionId, colId);
+    }
+
+    /**
+     * 灵活导出（按 视图过滤 + 列筛选 + 行筛选 + 排序 + 重命名）
+     * 全部参数为空时回退到全量导出，向后兼容旧调用。
+     */
+    public void exportSessionExcelWithView(String sessionId, String userId,
+                                           SessionExportRequest req,
+                                           HttpServletResponse response) throws IOException {
+        SessionResponse session = getSessionDetail(sessionId, userId);
+        Map<String, Object> currentView = session.getCurrentView();
+        Map<String, Object> extra = session.getUserExtraCols();
+
+        // 1. 合并 cols（原始 + 用户增列）
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> origDims = currentView != null
+                ? (List<Map<String, Object>>) currentView.get("dims") : null;
+        List<Map<String, Object>> mergedCols = new ArrayList<>();
+        if (origDims != null) {
+            mergedCols.addAll(origDims);
+        }
+        if (extra != null) {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> extraCols = (List<Map<String, Object>>) extra.get("cols");
+            if (extraCols != null) {
+                mergedCols.addAll(extraCols);
+            }
+        }
+
+        // 2. 合并行数据（原始行 + 增列值，按 rowIndex 索引）
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> origData = currentView != null
+                ? (List<Map<String, Object>>) currentView.get("data") : null;
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> extraValues = extra != null
+                ? (Map<String, Map<String, Object>>) extra.get("values") : null;
+
+        List<Map<String, Object>> mergedRows = new ArrayList<>();
+        if (origData != null) {
+            for (int i = 0; i < origData.size(); i++) {
+                Map<String, Object> row = new LinkedHashMap<>(origData.get(i));
+                row.put("__originalIndex", i);
+                if (extraValues != null) {
+                    Map<String, Object> evRow = extraValues.get(String.valueOf(i));
+                    if (evRow != null) {
+                        row.putAll(evRow);
+                    }
+                }
+                mergedRows.add(row);
+            }
+        }
+
+        // 3. 应用 rowIndices 过滤
+        if (StringUtils.hasText(req.getRowIndices())) {
+            Set<Integer> wanted = new HashSet<>();
+            for (String s : req.getRowIndices().split(",")) {
+                try { wanted.add(Integer.parseInt(s.trim())); } catch (NumberFormatException ignored) {}
+            }
+            mergedRows.removeIf(row -> {
+                Object idx = row.get("__originalIndex");
+                return !(idx instanceof Integer) || !wanted.contains(idx);
+            });
+        }
+
+        // 4. 应用 search 过滤（任意字段值包含关键字，case-insensitive）
+        if (StringUtils.hasText(req.getSearch())) {
+            String q = req.getSearch().toLowerCase();
+            mergedRows.removeIf(row -> {
+                for (Map.Entry<String, Object> e : row.entrySet()) {
+                    if ("__originalIndex".equals(e.getKey())) continue;
+                    Object v = e.getValue();
+                    if (v != null && v.toString().toLowerCase().contains(q)) return false;
+                }
+                return true;
+            });
+        }
+
+        // 5. 应用 order 排序
+        if (StringUtils.hasText(req.getOrder())) {
+            String[] parts = req.getOrder().split(":");
+            String orderField = parts[0];
+            boolean desc = parts.length > 1 && "desc".equalsIgnoreCase(parts[1]);
+            mergedRows.sort((a, b) -> {
+                Object va = a.get(orderField);
+                Object vb = b.get(orderField);
+                int cmp;
+                if (va == null && vb == null) cmp = 0;
+                else if (va == null) cmp = -1;
+                else if (vb == null) cmp = 1;
+                else if (va instanceof Number na && vb instanceof Number nb) {
+                    cmp = Double.compare(na.doubleValue(), nb.doubleValue());
+                } else {
+                    cmp = va.toString().compareTo(vb.toString());
+                }
+                return desc ? -cmp : cmp;
+            });
+        }
+
+        // 6. 应用 fields 列过滤
+        List<Map<String, Object>> exportCols;
+        if (StringUtils.hasText(req.getFields())) {
+            Set<String> wantedFields = new HashSet<>(Arrays.asList(req.getFields().split(",")));
+            // 去除空白
+            wantedFields.removeIf(s -> s == null || s.trim().isEmpty());
+            Set<String> trimmed = new HashSet<>();
+            for (String f : wantedFields) trimmed.add(f.trim());
+            exportCols = new ArrayList<>();
+            for (Map<String, Object> col : mergedCols) {
+                if (trimmed.contains(String.valueOf(col.get("id")))) {
+                    exportCols.add(col);
+                }
+            }
+        } else {
+            exportCols = mergedCols;
+        }
+
+        // 7. 应用 renames 列名重命名
+        Map<String, String> renameMap = new HashMap<>();
+        if (StringUtils.hasText(req.getRenames())) {
+            for (String pair : req.getRenames().split(",")) {
+                String[] kv = pair.split(":", 2);
+                if (kv.length == 2) {
+                    renameMap.put(kv[0].trim(), kv[1].trim());
+                }
+            }
+        }
+
+        // 8. 准备文件名与响应头
+        String format = StringUtils.hasText(req.getFormat()) ? req.getFormat().toLowerCase() : "xlsx";
+        String title = session.getTitle() != null ? session.getTitle() : sessionId;
+        String filename = URLEncoder.encode(title + "_" + LocalDate.now() + "." + format,
+                StandardCharsets.UTF_8).replace("+", "%20");
+        String contentType = "csv".equals(format)
+                ? "text/csv;charset=utf-8"
+                : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        response.setContentType(contentType);
+        response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + filename);
+
+        // 9. 输出
+        if ("csv".equals(format)) {
+            writeCsv(response.getOutputStream(), exportCols, mergedRows, renameMap);
+        } else {
+            writeXlsx(response.getOutputStream(), exportCols, mergedRows, renameMap);
+        }
+    }
+
+    // ──── Private helpers ────────────────────────────────────────
+
+    /** 校验会话归属 + 状态白名单，返回会话实体 */
+    private Session checkEditableSession(String sessionId, String userId) {
+        Session session = getById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话不存在: " + sessionId);
+        }
+        if (!session.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.ACCESS_UNAUTHORIZED, "无权修改该会话");
+        }
+        if (!EDITABLE_STATUS.contains(session.getStatus())) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT,
+                    "当前状态不可编辑: " + session.getStatus());
+        }
+        return session;
+    }
+
+    /** 判断 field 是否属于用户增列 */
+    @SuppressWarnings("unchecked")
+    private boolean isUserExtraCol(Map<String, Object> extra, String field) {
+        if (extra == null) return false;
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+        if (cols == null) return false;
+        for (Map<String, Object> col : cols) {
+            if (field.equals(col.get("id"))) return true;
+        }
+        return false;
+    }
+
+    /** 就地修改 currentView.data[rowIndex][field]，按 dim.type 标准化 value */
+    @SuppressWarnings("unchecked")
+    private void writeCurrentViewCell(Map<String, Object> cv, int rowIndex, String field, Object value) {
+        if (cv == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "currentView 为空");
+        }
+        List<Map<String, Object>> data = (List<Map<String, Object>>) cv.get("data");
+        if (data == null || rowIndex >= data.size() || rowIndex < 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "rowIndex 越界: " + rowIndex);
+        }
+        List<Map<String, Object>> dims = (List<Map<String, Object>>) cv.get("dims");
+        Map<String, Object> targetDim = null;
+        if (dims != null) {
+            for (Map<String, Object> dim : dims) {
+                if (field.equals(dim.get("id"))) {
+                    targetDim = dim;
+                    break;
+                }
+            }
+        }
+        if (targetDim == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "未找到列: " + field);
+        }
+        Object normalized = normalizeValueByDimType(value, String.valueOf(targetDim.get("type")));
+        data.get(rowIndex).put(field, normalized);
+    }
+
+    /** 写入用户增列的单元格值，返回更新后的 extra Map */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> writeExtraCellValue(Map<String, Object> extra, int rowIndex, String field, Object value) {
+        Map<String, Object> result = ensureExtraStructure(extra);
+        // 校验 field 在 cols 列表
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) result.get("cols");
+        Map<String, Object> targetCol = null;
+        for (Map<String, Object> col : cols) {
+            if (field.equals(col.get("id"))) {
+                targetCol = col;
+                break;
+            }
+        }
+        if (targetCol == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "未找到用户增列: " + field);
+        }
+        // 校验 tag 类型 value 必须在 options 内（允许 null/空字符串清空）
+        if ("tag".equals(targetCol.get("type")) && value != null && !"".equals(value)) {
+            @SuppressWarnings("unchecked")
+            List<String> options = (List<String>) targetCol.get("options");
+            if (options != null && !options.contains(String.valueOf(value))) {
+                throw new BusinessException(ErrorCode.INVALID_USER_INPUT,
+                        "tag 值不在可选项内: " + value);
+            }
+        }
+
+        Map<String, Map<String, Object>> values = (Map<String, Map<String, Object>>) result.get("values");
+        String key = String.valueOf(rowIndex);
+        Map<String, Object> rowMap = values.computeIfAbsent(key, k -> new LinkedHashMap<>());
+        if (value == null || "".equals(value)) {
+            rowMap.remove(field);
+        } else {
+            rowMap.put(field, value);
+        }
+        return result;
+    }
+
+    /** 确保 extra 是 { cols: [], values: {} } 的合法结构（懒初始化） */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> ensureExtraStructure(Map<String, Object> extra) {
+        Map<String, Object> result = extra != null ? extra : new LinkedHashMap<>();
+        if (!(result.get("cols") instanceof List)) {
+            result.put("cols", new ArrayList<Map<String, Object>>());
+        }
+        if (!(result.get("values") instanceof Map)) {
+            result.put("values", new LinkedHashMap<String, Map<String, Object>>());
+        }
+        return result;
+    }
+
+    /** 按 dim.type 把 value 标准化 */
+    private Object normalizeValueByDimType(Object value, String type) {
+        if (value == null) return null;
+        if ("number".equals(type) || "percent".equals(type) || "score".equals(type)) {
+            if (value instanceof Number) return ((Number) value).doubleValue();
+            try {
+                return Double.parseDouble(String.valueOf(value).replace(",", "").trim());
+            } catch (NumberFormatException e) {
+                throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "数值无效: " + value);
+            }
+        }
+        return String.valueOf(value);
+    }
+
+    /** 构造一个合并了原始列与增列的行 Map（用于 PATCH 响应） */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildMergedRow(Map<String, Object> cv, Map<String, Object> extra, int rowIndex) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (cv != null) {
+            List<Map<String, Object>> data = (List<Map<String, Object>>) cv.get("data");
+            if (data != null && rowIndex >= 0 && rowIndex < data.size()) {
+                result.putAll(data.get(rowIndex));
+            }
+        }
+        if (extra != null) {
+            Map<String, Map<String, Object>> values = (Map<String, Map<String, Object>>) extra.get("values");
+            if (values != null) {
+                Map<String, Object> ev = values.get(String.valueOf(rowIndex));
+                if (ev != null) result.putAll(ev);
+            }
+        }
+        return result;
+    }
+
+    /** 写 xlsx（复用 SessionController 老 export 的代码风格） */
+    private void writeXlsx(OutputStream out, List<Map<String, Object>> cols,
+                           List<Map<String, Object>> rows, Map<String, String> renameMap) throws IOException {
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("选品结果");
+
+            if (cols.isEmpty()) {
+                sheet.createRow(0).createCell(0).setCellValue("暂无数据");
+                workbook.write(out);
+                return;
+            }
+
+            CellStyle headerStyle = workbook.createCellStyle();
+            Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            // 表头
+            Row headerRow = sheet.createRow(0);
+            for (int i = 0; i < cols.size(); i++) {
+                Map<String, Object> col = cols.get(i);
+                String colId = String.valueOf(col.get("id"));
+                String displayLabel = renameMap.getOrDefault(colId,
+                        String.valueOf(col.getOrDefault("label", colId)));
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(displayLabel);
+                cell.setCellStyle(headerStyle);
+            }
+
+            // 数据
+            for (int r = 0; r < rows.size(); r++) {
+                Row row = sheet.createRow(r + 1);
+                Map<String, Object> rowData = rows.get(r);
+                for (int c = 0; c < cols.size(); c++) {
+                    String colId = String.valueOf(cols.get(c).get("id"));
+                    Object val = rowData.get(colId);
+                    Cell cell = row.createCell(c);
+                    if (val == null) {
+                        cell.setCellValue("");
+                    } else if (val instanceof Number num) {
+                        cell.setCellValue(num.doubleValue());
+                    } else {
+                        cell.setCellValue(String.valueOf(val));
+                    }
+                }
+            }
+
+            for (int i = 0; i < cols.size(); i++) {
+                sheet.autoSizeColumn(i);
+            }
+            workbook.write(out);
+        }
+    }
+
+    /** 写 CSV（UTF-8 BOM + RFC4180 引号） */
+    private void writeCsv(OutputStream out, List<Map<String, Object>> cols,
+                          List<Map<String, Object>> rows, Map<String, String> renameMap) throws IOException {
+        // UTF-8 BOM 让 Excel 正确识别中文
+        out.write(0xEF);
+        out.write(0xBB);
+        out.write(0xBF);
+
+        try (PrintWriter pw = new PrintWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8))) {
+            // 表头
+            for (int i = 0; i < cols.size(); i++) {
+                if (i > 0) pw.print(',');
+                Map<String, Object> col = cols.get(i);
+                String colId = String.valueOf(col.get("id"));
+                String displayLabel = renameMap.getOrDefault(colId,
+                        String.valueOf(col.getOrDefault("label", colId)));
+                pw.print(escapeCsv(displayLabel));
+            }
+            pw.println();
+
+            // 数据
+            for (Map<String, Object> rowData : rows) {
+                for (int c = 0; c < cols.size(); c++) {
+                    if (c > 0) pw.print(',');
+                    String colId = String.valueOf(cols.get(c).get("id"));
+                    Object val = rowData.get(colId);
+                    pw.print(escapeCsv(val == null ? "" : String.valueOf(val)));
+                }
+                pw.println();
+            }
+            pw.flush();
+        }
+    }
+
+    /** RFC4180 CSV 字段转义 */
+    private String escapeCsv(String s) {
+        if (s == null) return "";
+        boolean needQuote = s.indexOf(',') >= 0 || s.indexOf('"') >= 0
+                || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0;
+        if (!needQuote) return s;
+        return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 }

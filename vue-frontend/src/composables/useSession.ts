@@ -1,9 +1,29 @@
-import { ref, shallowRef, reactive, readonly, watch, onUnmounted, toValue } from 'vue'
+import { computed, ref, shallowRef, reactive, readonly, watch, onUnmounted, toValue } from 'vue'
 import type { MaybeRefOrGetter } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getSession, getSessionSteps, exportSessionExcel, resumeSession as apiResume, cancelSession as apiCancel } from '@/api/session'
+import {
+  addExtraCol as apiAddExtraCol,
+  cancelSession as apiCancel,
+  exportSessionExcel,
+  getSession,
+  getSessionSteps,
+  removeExtraCol as apiRemoveExtraCol,
+  renameExtraCol as apiRenameExtraCol,
+  resumeSession as apiResume,
+  updateSessionCell,
+  type ExportSessionParams,
+} from '@/api/session'
 import { createPlan } from '@/api/plan'
-import type { Session, SessionStep, ColumnDim, CurrentView } from '@/types'
+import type {
+  ColumnDim,
+  CurrentView,
+  ExtraColCreateRequest,
+  ExtraColUpdateRequest,
+  Session,
+  SessionStep,
+  UserExtraCol,
+  UserExtraColsPayload,
+} from '@/types'
 import { STORAGE_KEY } from '@/constants'
 
 export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
@@ -12,6 +32,15 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
   const tableData = ref<Record<string, unknown>[]>([])
   const tableCols = ref<ColumnDim[]>([])
   const currentView = shallowRef<CurrentView | null>(null)
+  const extraCols = ref<UserExtraCol[]>([])
+  const extraValues = ref<Record<string, Record<string, unknown>>>({})
+
+  /** 终态：SSE 不再覆盖 tableData，allow 编辑 */
+  const TERMINAL = ['completed', 'failed', 'cancelled']
+  /** 可编辑状态白名单（与后端 EDITABLE_STATUS 保持一致） */
+  const EDITABLE = ['completed', 'paused', 'failed', 'cancelled']
+
+  const isEditable = computed(() => EDITABLE.includes(session.status ?? ''))
 
   interface SessionMessage {
     role: 'user' | 'system'
@@ -28,8 +57,19 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
       id: String(d.id || ''),
       label: String(d.label || d.id || ''),
       type: d.type || 'string',
-      minWidth: d.type === 'number' || d.type === 'score' ? 100 : 140,
-    } as ColumnDim & { minWidth: number }))
+    }))
+  }
+
+  function applyUserExtraCols(payload: UserExtraColsPayload | null | undefined) {
+    if (!payload) {
+      extraCols.value = []
+      extraValues.value = {}
+      return
+    }
+    extraCols.value = Array.isArray(payload.cols) ? payload.cols : []
+    extraValues.value = payload.values && typeof payload.values === 'object'
+      ? payload.values
+      : {}
   }
 
   function applyCurrentView(cv: CurrentView | null) {
@@ -61,6 +101,7 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
       const res = await getSession(id)
       Object.assign(session, res.data || {})
       applyCurrentView(res.data?.currentView ?? null)
+      applyUserExtraCols(res.data?.userExtraCols ?? null)
     } catch (e) {
       console.warn('[useSession] fetchSession failed:', e)
     }
@@ -93,6 +134,11 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
 
     eventSource.addEventListener('step_complete', (e: MessageEvent) => {
       const d = JSON.parse(e.data)
+      // 终态守卫：会话已结束时，忽略迟到的 SSE 事件，避免覆盖用户编辑
+      if (TERMINAL.includes(session.status ?? '')) {
+        fetchSteps()
+        return
+      }
       const rowCount = d.rowCount ?? d.rows?.length ?? '?'
       pushMsg('system', `✅ ${d.blockId} 完成，${rowCount} 条数据`)
       if (d.rows) {
@@ -155,8 +201,107 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
   }
 
   // ── Actions ───────────────────────────────────────────
-  function handleExport() {
-    exportSessionExcel(toValue(sessionIdGetter), session.title)
+  function handleExport(params?: ExportSessionParams) {
+    return exportSessionExcel(toValue(sessionIdGetter), session.title, params)
+  }
+
+  /**
+   * 单元格行内编辑
+   * 区分原始列 vs 用户增列：
+   *  - 原始列：写到 currentView.data，本地乐观更新 tableData
+   *  - 用户增列：写到 user_extra_cols.values，本地乐观更新 extraValues
+   * 失败时回滚到旧值并抛异常给调用方处理
+   */
+  async function updateCell(rowIndex: number, field: string, value: unknown) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    const isExtra = extraCols.value.some(c => c.id === field)
+
+    if (isExtra) {
+      const key = String(rowIndex)
+      const oldRow = { ...(extraValues.value[key] || {}) }
+      const newRow = { ...oldRow }
+      if (value === null || value === undefined || value === '') {
+        delete newRow[field]
+      } else {
+        newRow[field] = value
+      }
+      // 乐观更新：替换整个 map 触发响应式
+      extraValues.value = { ...extraValues.value, [key]: newRow }
+      try {
+        await updateSessionCell(id, { rowIndex, field, value })
+      } catch (e) {
+        // 回滚
+        extraValues.value = { ...extraValues.value, [key]: oldRow }
+        ElMessage.error('单元格保存失败')
+        throw e
+      }
+    } else {
+      const oldRow = { ...tableData.value[rowIndex] }
+      tableData.value[rowIndex] = { ...oldRow, [field]: value }
+      try {
+        await updateSessionCell(id, { rowIndex, field, value })
+      } catch (e) {
+        tableData.value[rowIndex] = oldRow
+        ElMessage.error('单元格保存失败')
+        throw e
+      }
+    }
+  }
+
+  async function addExtraCol(req: ExtraColCreateRequest) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    try {
+      const res = await apiAddExtraCol(id, req)
+      if (res.data) {
+        extraCols.value = [...extraCols.value, res.data]
+        ElMessage.success('已新增列')
+      }
+    } catch (e) {
+      ElMessage.error('新增列失败')
+      throw e
+    }
+  }
+
+  async function renameExtraCol(colId: string, req: ExtraColUpdateRequest) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    try {
+      await apiRenameExtraCol(id, colId, req)
+      extraCols.value = extraCols.value.map(c =>
+        c.id === colId ? { ...c, ...req } : c,
+      )
+      ElMessage.success('已更新列')
+    } catch (e) {
+      ElMessage.error('更新列失败')
+      throw e
+    }
+  }
+
+  async function removeExtraCol(colId: string) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    try {
+      await apiRemoveExtraCol(id, colId)
+      extraCols.value = extraCols.value.filter(c => c.id !== colId)
+      // 同步清掉本地 values 里的对应键
+      const next: Record<string, Record<string, unknown>> = {}
+      for (const [rowKey, rowMap] of Object.entries(extraValues.value)) {
+        if (rowMap[colId] !== undefined) {
+          const cleaned = { ...rowMap }
+          delete cleaned[colId]
+          next[rowKey] = cleaned
+        } else {
+          next[rowKey] = rowMap
+        }
+      }
+      extraValues.value = next
+      ElMessage.success('已删除列')
+    } catch (e) {
+      ElMessage.error('删除列失败')
+      throw e
+    }
   }
 
   async function handleSavePlan(name: string, description: string): Promise<boolean> {
@@ -198,6 +343,8 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
     tableData.value = []
     tableCols.value = []
     currentView.value = null
+    extraCols.value = []
+    extraValues.value = {}
     // Reset session reactive without Object.keys delete hack
     const keys = Object.keys(session) as (keyof Session)[]
     for (const k of keys) {
@@ -228,7 +375,10 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
     tableData: readonly(tableData),
     tableCols: readonly(tableCols),
     currentView: readonly(currentView),
+    extraCols: readonly(extraCols),
+    extraValues: readonly(extraValues),
     messages: readonly(messages),
+    isEditable,
     fetchSession,
     fetchSteps,
     pushMsg,
@@ -236,5 +386,9 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
     handleSavePlan,
     resumeSession,
     cancelSession,
+    updateCell,
+    addExtraCol,
+    renameExtraCol,
+    removeExtraCol,
   }
 }

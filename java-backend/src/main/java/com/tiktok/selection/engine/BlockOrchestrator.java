@@ -121,7 +121,8 @@ public class BlockOrchestrator {
         m.put("off_mark", "下架标记"); m.put("product_rating", "商品评分"); m.put("review_count", "评论数");
         m.put("product_commission_rate", "佣金率"); m.put("sales_flag", "销售标记");
         m.put("sales_trend_flag", "销售趋势标记"); m.put("cover_url", "封面图");
-        m.put("first_crawl_dt", "首次抓取日期"); m.put("brand_name", "品牌名");
+        m.put("first_crawl_dt", "首次抓取日期"); m.put("last_crawl_dt", "最后抓取日期");
+        m.put("brand_name", "品牌名");
         // 销售数据
         m.put("total_sale_cnt", "总销量"); m.put("total_sale_gmv_amt", "总销售额");
         m.put("total_sale_1d_cnt", "1日销量"); m.put("total_sale_7d_cnt", "7日销量");
@@ -299,6 +300,10 @@ public class BlockOrchestrator {
         // 计算 blockChain 哈希前6位，用于记忆轮次标识
         String chainHash = computeChainHash(blockChain);
 
+        // 扫描 blockChain 抽取 SCORE 块的 dimension_name 作为动态 label，供 buildDims 使用
+        // executeAsync 和 resumeAsync 两条路径都经过这里，统一在这里填充一次即可
+        state.dynamicLabels = extractDynamicLabels(blockChain);
+
         try {
             for (int i = startIndex; i < totalSteps; i++) {
                 int seq = i + 1;
@@ -339,7 +344,7 @@ public class BlockOrchestrator {
                 }
 
                 // 每步更新 currentView（持久化中间结果，前端刷新可看到）
-                List<Map<String, Object>> stepDims = buildDims(state.availableFields);
+                List<Map<String, Object>> stepDims = buildDims(state.availableFields, state.dynamicLabels);
                 List<Map<String, Object>> displayData = translateForDisplay(state.inputData);
                 updateCurrentView(sessionId, displayData, stepDims, state.currentOutputType);
                 sendStepComplete(sessionId, seq, totalSteps, blockId, result, stepDims, displayData);
@@ -351,7 +356,7 @@ public class BlockOrchestrator {
             }
 
             // 正常完成
-            List<Map<String, Object>> finalDims = buildDims(state.availableFields);
+            List<Map<String, Object>> finalDims = buildDims(state.availableFields, state.dynamicLabels);
             List<Map<String, Object>> finalDisplayData = translateForDisplay(state.inputData);
             completeSession(session, state.totalApiCalls, state.totalTokens, finalDisplayData, finalDims);
             sseEmitterManager.sendEvent(sessionId,
@@ -382,7 +387,7 @@ public class BlockOrchestrator {
                 ? result.getOutputFields() : state.availableFields;
         String pauseType = result.getOutputType() != null
                 ? result.getOutputType() : state.currentOutputType;
-        List<Map<String, Object>> dims = buildDims(pauseFields);
+        List<Map<String, Object>> dims = buildDims(pauseFields, state.dynamicLabels);
         pauseSession(session, state.totalApiCalls, state.totalTokens, pauseData, dims, pauseType);
         sseEmitterManager.sendEvent(session.getId(),
                 SseProgressEvent.sessionPaused(session.getId(), seq, blockId,
@@ -694,14 +699,43 @@ public class BlockOrchestrator {
     }
 
     /**
-     * 根据字段名列表构建前端 dims 定义，推断基础类型。
+     * 从积木链里抽取用户自定义字段的中文 label。
+     * 当前覆盖：SCORE_NUMERIC / SCORE_SEMANTIC 块配置里的 output_field → dimension_name。
+     * 这些字段是运行时动态生成的，不在静态 FIELD_LABELS 里，必须单独拎出来。
      */
-    private List<Map<String, Object>> buildDims(List<String> fields) {
+    private Map<String, String> extractDynamicLabels(List<?> blockChain) {
+        Map<String, String> result = new HashMap<>();
+        if (blockChain == null) return result;
+        for (Object block : blockChain) {
+            if (!(block instanceof Map<?, ?> blockMap)) continue;
+            Object blockIdObj = blockMap.get("blockId");
+            if (!(blockIdObj instanceof String blockId)) continue;
+            if (!"SCORE_NUMERIC".equals(blockId) && !"SCORE_SEMANTIC".equals(blockId)) continue;
+            Object configObj = blockMap.get("config");
+            if (!(configObj instanceof Map<?, ?> config)) continue;
+            String outputField = config.get("output_field") instanceof String s ? s : null;
+            String dimensionName = config.get("dimension_name") instanceof String s ? s : null;
+            if (outputField != null && dimensionName != null && !dimensionName.isBlank()) {
+                result.put(outputField, dimensionName);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 根据字段名列表构建前端 dims 定义，推断基础类型。
+     * Label 查找优先级：dynamicLabels（用户自定义）> FIELD_LABELS（静态映射）> 字段 id 本身。
+     */
+    private List<Map<String, Object>> buildDims(List<String> fields, Map<String, String> dynamicLabels) {
         if (fields == null) return new ArrayList<>();
         return fields.stream().map(f -> {
             Map<String, Object> dim = LinkedHashMap.newLinkedHashMap(4);
             dim.put("id",    f);
-            dim.put("label", FIELD_LABELS.getOrDefault(f, f));
+            String label = dynamicLabels != null ? dynamicLabels.get(f) : null;
+            if (label == null) {
+                label = FIELD_LABELS.getOrDefault(f, f);
+            }
+            dim.put("label", label);
             dim.put("type",  inferFieldType(f));
             return dim;
         }).toList();
@@ -864,6 +898,8 @@ public class BlockOrchestrator {
         String currentOutputType;
         int totalApiCalls;
         long totalTokens;
+        /** 用户自定义字段的中文 label（如 SCORE 块的 output_field → dimension_name）；执行入口一次性填充 */
+        Map<String, String> dynamicLabels;
 
         LoopState(List<Map<String, Object>> inputData, List<String> availableFields,
                   String currentOutputType, int totalApiCalls, long totalTokens) {
@@ -872,6 +908,7 @@ public class BlockOrchestrator {
             this.currentOutputType = currentOutputType;
             this.totalApiCalls = totalApiCalls;
             this.totalTokens = totalTokens;
+            this.dynamicLabels = new HashMap<>();
         }
     }
 }

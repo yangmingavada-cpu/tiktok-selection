@@ -140,6 +140,7 @@ import ResultDialog from './new-session/result-dialog.vue'
 import SessionHistoryRail from './new-session/session-history-rail.vue'
 import { GREETING } from './new-session/constants'
 import { answerPlanQuestion, buildPlanAdjustmentGuide, buildPlanInterpretation } from './new-session/plan-advisor'
+void answerPlanQuestion // 暂未使用，保留 import 以备后续 Type A 文字回答场景
 import type {
   AskDialogState,
   ChatMessage as ChatMsg,
@@ -386,6 +387,7 @@ async function openResultDialog() {
   resultDialogVisible.value = true
   scheduleResultSync(sessionId)
 }
+void openResultDialog // 保留以备后续手动打开结果弹窗
 
 function fillStarterPrompt(prompt: string) {
   if (thinking.value) return

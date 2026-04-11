@@ -167,9 +167,13 @@ CREATE TABLE IF NOT EXISTS db_session.session_data (
     session_id          VARCHAR(36) NOT NULL,
     current_view        JSONB DEFAULT NULL,
     candidate_pool      JSONB DEFAULT NULL,
+    user_extra_cols     JSONB DEFAULT NULL,
     update_time         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (session_id)
 );
+COMMENT ON COLUMN db_session.session_data.user_extra_cols IS '用户在前端手动添加的列与值，结构 {cols:[{id,label,type,options}], values:{rowIdx:{colId:value}}}';
+-- 兼容迁移：旧库补列
+ALTER TABLE db_session.session_data ADD COLUMN IF NOT EXISTS user_extra_cols JSONB DEFAULT NULL;
 DROP TRIGGER IF EXISTS trg_session_data_update_time ON db_session.session_data;
 CREATE TRIGGER trg_session_data_update_time BEFORE UPDATE ON db_session.session_data FOR EACH ROW EXECUTE FUNCTION update_time_trigger();
 

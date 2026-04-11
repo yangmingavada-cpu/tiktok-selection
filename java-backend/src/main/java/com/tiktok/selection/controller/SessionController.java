@@ -3,7 +3,11 @@ package com.tiktok.selection.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.tiktok.selection.common.R;
 import com.tiktok.selection.dto.ConversationSnapshot;
+import com.tiktok.selection.dto.request.ExtraColCreateRequest;
+import com.tiktok.selection.dto.request.ExtraColUpdateRequest;
+import com.tiktok.selection.dto.request.SessionCellUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCreateRequest;
+import com.tiktok.selection.dto.request.SessionExportRequest;
 import com.tiktok.selection.dto.response.SessionListResponse;
 import com.tiktok.selection.dto.response.SessionResponse;
 import com.tiktok.selection.dto.response.SessionStepResponse;
@@ -22,12 +26,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -160,97 +159,72 @@ public class SessionController {
     }
 
     /**
-     * 导出会话结果为 Excel (.xlsx) 文件
+     * 导出会话结果（支持 xlsx / csv，可按视图过滤、列筛选、排序、行选）
+     * 所有 query 参数都为空时回退到全量导出，向后兼容旧调用。
      *
      * @param id       会话ID
+     * @param req      导出参数（format / fields / order / search / rowIndices / renames）
      * @param response HttpServletResponse
      */
     @GetMapping("/{id}/export")
-    public void exportExcel(@PathVariable String id, HttpServletResponse response) throws IOException {
-        String userId = getCurrentUserId();
-        SessionResponse session = sessionService.getSessionDetail(id, userId);
+    public void exportExcel(@PathVariable String id,
+                            @ModelAttribute SessionExportRequest req,
+                            HttpServletResponse response) throws IOException {
+        sessionService.exportSessionExcelWithView(id, getCurrentUserId(), req, response);
+    }
 
-        Map<String, Object> currentView = session.getCurrentView();
-        String title = session.getTitle() != null ? session.getTitle() : id;
-        String filename = URLEncoder.encode(title + ".xlsx", StandardCharsets.UTF_8).replace("+", "%20");
+    /**
+     * 编辑单元格（原始列或用户增列）
+     *
+     * @param id  会话ID
+     * @param req 单元格更新请求
+     * @return 更新后的整行数据 + 更新时间
+     */
+    @PatchMapping("/{id}/cells")
+    public R<Map<String, Object>> updateCell(@PathVariable String id,
+                                             @Valid @RequestBody SessionCellUpdateRequest req) {
+        return R.ok(sessionService.updateSessionCell(id, getCurrentUserId(), req));
+    }
 
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + filename);
+    /**
+     * 新增用户列（备注/标签）
+     *
+     * @param id  会话ID
+     * @param req 增列请求
+     * @return 新增的列定义
+     */
+    @PostMapping("/{id}/extra-cols")
+    public R<Map<String, Object>> addExtraCol(@PathVariable String id,
+                                              @Valid @RequestBody ExtraColCreateRequest req) {
+        return R.ok(sessionService.addExtraCol(id, getCurrentUserId(), req));
+    }
 
-        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
-            Sheet sheet = workbook.createSheet("选品结果");
+    /**
+     * 修改用户列（重命名 / 改 options）
+     *
+     * @param id    会话ID
+     * @param colId 列ID（必须以 user_ 前缀）
+     * @param req   更新请求
+     * @return 更新后的列定义
+     */
+    @PatchMapping("/{id}/extra-cols/{colId}")
+    public R<Map<String, Object>> renameExtraCol(@PathVariable String id,
+                                                 @PathVariable String colId,
+                                                 @Valid @RequestBody ExtraColUpdateRequest req) {
+        return R.ok(sessionService.renameExtraCol(id, getCurrentUserId(), colId, req));
+    }
 
-            if (currentView == null || !currentView.containsKey("data")) {
-                Row row = sheet.createRow(0);
-                row.createCell(0).setCellValue("暂无数据");
-                workbook.write(response.getOutputStream());
-                return;
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> dims = (List<Map<String, Object>>) currentView.get("dims");
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> data = (List<Map<String, Object>>) currentView.get("data");
-
-            // 表头样式
-            CellStyle headerStyle = workbook.createCellStyle();
-            Font headerFont = workbook.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
-            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-            List<String> keys;
-            if (dims != null && !dims.isEmpty()) {
-                keys = dims.stream().map(d -> String.valueOf(d.get("id"))).toList();
-                // 写表头
-                Row headerRow = sheet.createRow(0);
-                for (int i = 0; i < dims.size(); i++) {
-                    Cell cell = headerRow.createCell(i);
-                    cell.setCellValue(String.valueOf(dims.get(i).getOrDefault("label", dims.get(i).get("id"))));
-                    cell.setCellStyle(headerStyle);
-                }
-            } else if (data != null && !data.isEmpty()) {
-                keys = List.copyOf(data.get(0).keySet());
-                Row headerRow = sheet.createRow(0);
-                for (int i = 0; i < keys.size(); i++) {
-                    Cell cell = headerRow.createCell(i);
-                    cell.setCellValue(keys.get(i));
-                    cell.setCellStyle(headerStyle);
-                }
-            } else {
-                Row row = sheet.createRow(0);
-                row.createCell(0).setCellValue("暂无数据");
-                workbook.write(response.getOutputStream());
-                return;
-            }
-
-            // 写数据行
-            if (data != null) {
-                for (int r = 0; r < data.size(); r++) {
-                    Row row = sheet.createRow(r + 1);
-                    Map<String, Object> rowData = data.get(r);
-                    for (int c = 0; c < keys.size(); c++) {
-                        Cell cell = row.createCell(c);
-                        Object val = rowData.get(keys.get(c));
-                        if (val == null) {
-                            cell.setCellValue("");
-                        } else if (val instanceof Number num) {
-                            cell.setCellValue(num.doubleValue());
-                        } else {
-                            cell.setCellValue(String.valueOf(val));
-                        }
-                    }
-                }
-            }
-
-            // 自动列宽
-            for (int i = 0; i < keys.size(); i++) {
-                sheet.autoSizeColumn(i);
-            }
-
-            workbook.write(response.getOutputStream());
-        }
+    /**
+     * 删除用户列（同时清理所有行的对应值）
+     *
+     * @param id    会话ID
+     * @param colId 列ID（必须以 user_ 前缀）
+     * @return 空响应
+     */
+    @DeleteMapping("/{id}/extra-cols/{colId}")
+    public R<Void> removeExtraCol(@PathVariable String id, @PathVariable String colId) {
+        sessionService.removeExtraCol(id, getCurrentUserId(), colId);
+        return R.ok();
     }
 
     /**

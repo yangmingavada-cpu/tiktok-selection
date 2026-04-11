@@ -1,0 +1,718 @@
+/*
+ * DataGrid 样式 —— 视觉与 BEM 类命名 vendor 自 Baserow（MIT licensed）
+ *
+ * 来源：
+ *   - baserow/web-frontend/modules/core/assets/scss/components/views/grid.scss
+ *   - baserow/web-frontend/modules/core/assets/scss/components/views/grid/text.scss
+ *   - baserow/web-frontend/modules/core/assets/scss/components/views/grid/long_text.scss
+ *   - baserow/web-frontend/modules/core/assets/scss/components/views/grid/number.scss
+ *   - baserow/web-frontend/modules/core/assets/scss/components/views/grid/rating.scss
+ *
+ * 调整：
+ *   1) 所有 SCSS 变量与 mixin 已展开为原始 CSS
+ *   2) 删除项目不需要的 group view / row drag / field drag / freeze handle / foot logo
+ *      / row warning / cell error 等模块
+ *   3) 保留 BEM 类名 grid-view__* 以便视觉一致；少数自有扩展用 data-grid__* 前缀
+ *   4) 行高三档：紧凑 28 / 标准 36 / 宽松 56
+ */
+
+/* ============================================================
+   主容器
+   ============================================================ */
+.grid-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background-color: #ffffff;
+  font-size: 13px;
+  color: #1f2937;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.grid-view.grid-view--disable-selection {
+  user-select: none;
+}
+
+/* 根容器用 tabindex=0 接收键盘焦点，不要显示聚焦轮廓 */
+.grid-view:focus,
+.grid-view:focus-visible {
+  outline: none;
+}
+
+/* ============================================================
+   Toolbar（自有扩展）
+   ============================================================ */
+.data-grid__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: #fafbfc;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.data-grid__toolbar-stats {
+  font-size: 13px;
+  color: #4b5563;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.data-grid__toolbar-search {
+  width: 220px;
+  flex-shrink: 0;
+}
+
+.data-grid__toolbar-spacer {
+  flex: 1;
+}
+
+.data-grid__toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background-color: #e5e7eb;
+}
+
+/* ============================================================
+   Body 布局：单滚动容器 + CSS sticky
+   外层 .data-grid__scroll 提供唯一的横向+纵向滚动条；
+   左 pane 用 sticky left=0 横向钉住；header 用 sticky top=0 纵向钉住。
+   这是 Baserow grid view 的实际做法，无需 JS 手动同步滚动。
+   ============================================================ */
+.data-grid__scroll {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  background-color: #ffffff;
+}
+
+.data-grid__grid-inner {
+  display: flex;
+  min-width: 100%;
+  width: max-content;
+  align-items: flex-start;
+}
+
+.grid-view__left {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  flex-shrink: 0;
+  background-color: #fafbfc;
+  border-right: 1px solid #cbd5e1;
+  /* 冻结列右侧阴影提示（替代原 divider） */
+  box-shadow: 2px 0 4px -2px rgba(15, 23, 42, 0.08);
+}
+
+.grid-view__right {
+  flex: 1 0 auto;
+  background-color: #ffffff;
+}
+
+/* ============================================================
+   Head（表头）—— sticky 到 .data-grid__scroll 的顶部
+   ============================================================ */
+.grid-view__head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 33px;
+  background-color: #f3f4f6;
+  border-bottom: 1px solid #cbd5e1;
+  z-index: 3;
+  flex-shrink: 0;
+}
+
+/* 左 pane 的 header 必须高于右 pane 的 header，否则横向滚动时 top-left corner
+   会被右 header 盖住（右 header 先 sticky，左 header 后渲染但 z-index 相同会被覆盖） */
+.grid-view__left .grid-view__head {
+  background-color: #fafbfc;
+  z-index: 5;
+}
+
+/* 行号列的表头格子（左 pane 第一列） */
+.grid-view__head-row-identifier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 56px;
+  flex-shrink: 0;
+  border-right: 1px solid #e5e7eb;
+  font-size: 11px;
+  font-weight: 500;
+  color: #9ca3af;
+}
+
+.data-grid__head-checkbox {
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid #e5e7eb;
+  height: 100%;
+}
+
+/* ============================================================
+   行容器 + 单行
+   ============================================================ */
+.grid-view__rows {
+  position: relative;
+  background-color: #ffffff;
+}
+
+.grid-view__row {
+  position: relative;
+  display: flex;
+  height: 36px;
+  background-color: #ffffff;
+}
+
+.grid-view--row-height-compact .grid-view__row {
+  height: 28px;
+}
+
+.grid-view--row-height-default .grid-view__row {
+  height: 36px;
+}
+
+.grid-view--row-height-tall .grid-view__row {
+  height: 56px;
+}
+
+.grid-view__row:hover,
+.grid-view__row.grid-view__row--hover {
+  background-color: #fafbfc;
+}
+
+.grid-view__row.grid-view__row--selected {
+  background-color: #e0e7ff;
+}
+
+.grid-view__row.grid-view__row--editing {
+  background-color: #ffffff;
+}
+
+/* 行号 + 复选框 */
+.data-grid__row-checkbox {
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.grid-view__row-info {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  width: 56px;
+  flex-shrink: 0;
+  border-right: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f3f4f6;
+  background-color: #fafbfc;
+}
+
+.grid-view__row-count {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* > 9999 缩字号（参考 Baserow 行号大数字处理） */
+.grid-view__row-count.grid-view__row-count--small {
+  font-size: 10px;
+}
+
+/* ============================================================
+   列（grid-view__column）—— 既是 head 的列，也是 row 里的 cell 容器
+   ============================================================ */
+.grid-view__column {
+  position: relative;
+  height: 100%;
+  border-right: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f3f4f6;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background-color: inherit;
+  box-sizing: border-box;
+}
+
+.grid-view__head .grid-view__column {
+  height: 32px;
+  background-color: #f3f4f6;
+  border-bottom: none;
+  border-right-color: #e5e7eb;
+  font-weight: 500;
+}
+
+.grid-view__left .grid-view__head .grid-view__column {
+  background-color: #fafbfc;
+}
+
+/* 状态：搜索匹配 */
+.grid-view__column.grid-view__column--matches-search {
+  background-color: #e0e7ff;
+}
+
+/* 状态：当前排序列 */
+.grid-view__column.grid-view__column--sorted::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background-color: rgba(254, 243, 199, 0.6);
+  pointer-events: none;
+}
+
+/* 列拖拽：header 光标 + drop target 视觉指示（插入到此列之前） */
+.grid-view__head .grid-view__column[draggable="true"] {
+  cursor: grab;
+}
+
+.grid-view__head .grid-view__column[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.grid-view__head .grid-view__column.grid-view__column--drop-target {
+  box-shadow: inset 2px 0 0 0 #6366f1;
+}
+
+/* ============================================================
+   单元格内容（grid-view__cell）—— 在 grid-view__column 内部
+   ============================================================ */
+.grid-view__cell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+  font-size: 13px;
+  color: #1f2937;
+  box-sizing: border-box;
+}
+
+.grid-view__cell.grid-view__cell--editable {
+  cursor: text;
+}
+
+/* 编辑态：让 cell 内边距归零并允许内容溢出，
+   这样 <input> 和 ElSelect 能完整占满单元格且下拉框定位正确 */
+.grid-view__cell.editing {
+  padding: 0;
+  overflow: visible;
+}
+
+/* 选中态（active） */
+.grid-view__cell.active {
+  z-index: 2;
+}
+
+.grid-view__cell.active::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  bottom: -2px;
+  left: -1px;
+  background: transparent;
+  border: 3px solid #4f46e5;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.25), 0 0 8px 0 rgba(79, 70, 229, 0.35);
+}
+
+.grid-view__cell.active.editing::before {
+  border-color: #4338ca;
+  box-shadow: 0 0 0 1px rgba(67, 56, 202, 0.3), 0 0 10px 0 rgba(67, 56, 202, 0.45);
+}
+
+.grid-view__cell.active.invalid::before {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.3), 0 0 10px 0 rgba(220, 38, 38, 0.4);
+}
+
+/* ============================================================
+   单元格内容渲染（按类型）
+   ============================================================ */
+
+/* 通用文本 */
+.data-grid__cell-text {
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+/* 长文本（多行省略） */
+.data-grid__cell-text--long {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+}
+
+/* 链接 */
+.data-grid__cell-link {
+  color: #4f46e5;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.data-grid__cell-link:hover {
+  text-decoration: underline;
+}
+
+/* 图片缩略图 */
+.data-grid__cell-thumb {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: #f3f4f6;
+  flex-shrink: 0;
+}
+
+.data-grid__cell-thumb--fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #9ca3af;
+  background-color: #f3f4f6;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+}
+
+/* 数字（右对齐） */
+.data-grid__cell-number {
+  width: 100%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #1f2937;
+}
+
+/* 百分比 bar */
+.data-grid__cell-percent {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.data-grid__cell-percent-num {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: #4b5563;
+  flex-shrink: 0;
+  min-width: 48px;
+  text-align: right;
+}
+
+.data-grid__cell-percent-bar {
+  flex: 1;
+  height: 6px;
+  background-color: #f3f4f6;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.data-grid__cell-percent-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8 0%, #6366f1 100%);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+/* 评分 bar（红→黄→绿渐变） */
+.data-grid__cell-score {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.data-grid__cell-score-num {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: right;
+}
+
+.data-grid__cell-score-bar {
+  flex: 1;
+  height: 6px;
+  background-color: #f3f4f6;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.data-grid__cell-score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+/* Tag 单选 */
+.data-grid__tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.data-grid__tag--empty {
+  color: #9ca3af;
+}
+
+/* ============================================================
+   编辑态 input
+   ============================================================ */
+.data-grid__cell-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  border: none;
+  outline: none;
+  background: #ffffff;
+  font-size: 13px;
+  color: #1f2937;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.data-grid__cell-input--number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ElSelect 在编辑态填充整个单元格宽度。
+   不要用 position:absolute —— 会破坏 ElSelect 内部 wrapper 的布局，
+   导致下拉框定位异常甚至看不见。用 width:100% 让它跟随 cell 的 flex 布局。 */
+.data-grid__cell-select {
+  width: 100%;
+}
+
+/* 让 ElSelect 的内部 wrapper 填满单元格高度，避免出现上下留白 */
+.grid-view__cell .data-grid__cell-select .el-select__wrapper {
+  min-height: 26px;
+  padding: 2px 8px;
+  box-shadow: none;
+  background: #ffffff;
+}
+
+/* ============================================================
+   列头（grid-view__description）—— Baserow 三段式
+   ============================================================ */
+.grid-view__description {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  width: 100%;
+  padding: 0 10px 0 10px;
+  user-select: none;
+}
+
+.grid-view__description-icon {
+  font-size: 13px;
+  color: #6b7280;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.grid-view__description-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.grid-view__description-name--editing {
+  cursor: text;
+}
+
+.grid-view__description-options {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.grid-view__column:hover .grid-view__description-options {
+  opacity: 1;
+}
+
+.grid-view__description-icon-trigger {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: #6b7280;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.grid-view__description-icon-trigger:hover {
+  color: #111827;
+  background-color: rgba(15, 23, 42, 0.06);
+}
+
+.grid-view__description-icon-trigger.active {
+  color: #4f46e5;
+}
+
+/* 列宽 resize 手柄（4px 宽，最右侧） */
+.grid-view__description-width {
+  position: absolute;
+  top: 3px;
+  right: -4px;
+  bottom: 3px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.grid-view__description-width::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 3px;
+  bottom: 0;
+  left: 3px;
+  border-radius: 2px;
+  transition: background-color 0.1s ease;
+}
+
+.grid-view__description-width:hover::before,
+.grid-view__description-width.dragging::before {
+  background-color: #6366f1;
+}
+
+/* 列头编辑模式 */
+.grid-view__description-name-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: #111827;
+  background: #ffffff;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: inherit;
+}
+
+/* ============================================================
+   空状态
+   ============================================================ */
+.data-grid__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+.data-grid__empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  color: #cbd5e1;
+}
+
+/* ============================================================
+   Toolbar 列显隐 dropdown —— 限高 + 滚动
+   popper 被 teleport 到 body，无法用 scoped 样式控制
+   ============================================================ */
+.data-grid__col-visibility-popper .el-dropdown-menu {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px 0;
+  min-width: 180px;
+}
+
+.data-grid__col-visibility-popper .el-dropdown-menu__item {
+  padding: 6px 14px;
+  line-height: 1.5;
+}
+
+.data-grid__col-visibility-popper .col-visibility-label {
+  margin-left: 8px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* ============================================================
+   响应式：小屏幕收紧
+   ============================================================ */
+@media (max-width: 768px) {
+  .data-grid__toolbar-search {
+    width: 140px;
+  }
+
+  .grid-view__row-info {
+    width: 40px;
+  }
+
+  .grid-view__head-row-identifier {
+    width: 40px;
+  }
+}

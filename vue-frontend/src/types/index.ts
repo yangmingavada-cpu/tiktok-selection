@@ -84,6 +84,7 @@ export interface Session {
   }
   competitorAnalysis?: string
   remark?: string
+  userExtraCols?: UserExtraColsPayload
 }
 
 export interface CurrentView {
@@ -98,6 +99,43 @@ export interface ColumnDim {
   id: string
   label: string
   type: 'string' | 'number' | 'percent' | 'score'
+}
+
+// ============================================================
+// User extra columns（用户在前端手动添加的列）
+// ============================================================
+export type UserExtraColType = 'string' | 'tag'
+
+export interface UserExtraCol {
+  id: string                  // 形如 user_string_a3f1，必须 user_ 前缀
+  label: string
+  type: UserExtraColType
+  options?: readonly string[] // type=tag 时必填
+}
+
+export interface UserExtraColsPayload {
+  cols: UserExtraCol[]
+  values: Record<string, Record<string, unknown>>  // key 是 rowIndex 字符串
+}
+
+export interface ExtraColCreateRequest {
+  label: string
+  type: UserExtraColType
+  options?: readonly string[]
+}
+
+export interface ExtraColUpdateRequest {
+  label?: string
+  options?: readonly string[]
+}
+
+/** DataGrid 内部使用的统一列定义（合并原始列与用户增列） */
+export interface DataGridColumn {
+  id: string
+  label: string
+  type: 'string' | 'number' | 'percent' | 'score' | 'tag'
+  options?: readonly string[]   // tag 类型才有
+  isExtra: boolean              // 是否为用户增列
 }
 
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'paused'

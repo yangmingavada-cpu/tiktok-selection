@@ -25,5 +25,13 @@ public class SessionData {
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> candidatePool;
 
+    /**
+     * 用户在前端手动添加的列与值
+     * 结构：{ cols: [{id,label,type,options}], values: { rowIdx: {colId: value} } }
+     * 与 currentView 完全隔离，不会被 SSE step_complete 覆盖。
+     */
+    @TableField(value = "user_extra_cols", typeHandler = JacksonTypeHandler.class)
+    private Map<String, Object> userExtraCols;
+
     private LocalDateTime updateTime;
 }

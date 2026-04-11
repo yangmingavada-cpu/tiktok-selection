@@ -54,6 +54,12 @@ public class SessionResponse {
     private Map<String, Object> currentView;
 
     /**
+     * 用户在前端添加的额外列与值
+     * 结构：{ cols: [{id,label,type,options}], values: { rowIdx: {colId: value} } }
+     */
+    private Map<String, Object> userExtraCols;
+
+    /**
      * 已执行步骤总数
      */
     private Integer stepCount;
