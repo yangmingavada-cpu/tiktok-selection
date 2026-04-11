@@ -17,7 +17,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -96,15 +95,11 @@ public class PlanController {
             req.setBlockChain(chain);
         }
 
+        // createSession 内部会自动根据 sourcePlanId 递增 plan.useCount + 更新 lastUsedTime
         Session session = sessionService.createSession(userId, req);
 
         // 启动执行
         sessionService.executeSession(session.getId(), userId);
-
-        // 记录最近使用时间
-        plan.setLastUsedTime(LocalDateTime.now());
-        plan.setUseCount(plan.getUseCount() == null ? 1 : plan.getUseCount() + 1);
-        userPlanService.updateById(plan);
 
         SessionResponse response = sessionService.getSessionDetail(session.getId(), userId);
         return R.ok(response);

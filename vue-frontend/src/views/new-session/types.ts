@@ -7,6 +7,11 @@ export interface ChatMessage {
   plan?: Block[]
   planDraft?: PlanDraft
   execCard?: ExecSession
+  /**
+   * 执行卡片持久化引用：snapshot 里只存 sessionId，
+   * 恢复时按这个引用拉对应 session 的 currentView + steps 重建 ExecSession
+   */
+  execCardRef?: { sessionId: string }
   summary?: string
   tokens?: number
   sourceText?: string

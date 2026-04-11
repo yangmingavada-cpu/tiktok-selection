@@ -60,6 +60,10 @@ export interface Session {
   id: string
   userId: string
   title: string
+  /** 对话历史独立标题，NULL 时 fallback 到 title */
+  chatTitle?: string | null
+  /** LangGraph 对话线程ID，恢复对话时复用以保留上下文 */
+  agentThreadId?: string | null
   status: SessionStatus
   currentStep: number
   sourceText: string

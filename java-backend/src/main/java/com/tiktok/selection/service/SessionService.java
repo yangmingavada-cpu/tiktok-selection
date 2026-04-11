@@ -18,11 +18,13 @@ import com.tiktok.selection.dto.response.SessionResponse;
 import com.tiktok.selection.entity.Session;
 import com.tiktok.selection.entity.SessionData;
 import com.tiktok.selection.entity.SessionStep;
+import com.tiktok.selection.entity.UserPlan;
 import com.tiktok.selection.engine.BlockOrchestrator;
 import com.tiktok.selection.manager.SseEmitterManager;
 import com.tiktok.selection.mapper.SessionDataMapper;
 import com.tiktok.selection.mapper.SessionMapper;
 import com.tiktok.selection.mapper.SessionStepMapper;
+import com.tiktok.selection.mapper.UserPlanMapper;
 import com.tiktok.selection.common.BusinessException;
 import com.tiktok.selection.common.ErrorCode;
 import com.tiktok.selection.common.SessionStatusEnum;
@@ -74,17 +76,20 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
     private final SseEmitterManager sseEmitterManager;
     private final BlockOrchestrator blockOrchestrator;
     private final ObjectMapper objectMapper;
+    private final UserPlanMapper userPlanMapper;
 
     public SessionService(SessionDataMapper sessionDataMapper,
                           SessionStepMapper sessionStepMapper,
                           SseEmitterManager sseEmitterManager,
                           BlockOrchestrator blockOrchestrator,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          UserPlanMapper userPlanMapper) {
         this.sessionDataMapper = sessionDataMapper;
         this.sessionStepMapper = sessionStepMapper;
         this.sseEmitterManager = sseEmitterManager;
         this.blockOrchestrator = blockOrchestrator;
         this.objectMapper = objectMapper;
+        this.userPlanMapper = userPlanMapper;
     }
 
     /**
@@ -122,8 +127,30 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         sessionData.setUpdateTime(LocalDateTime.now());
         sessionDataMapper.insert(sessionData);
 
+        // 如果是从方案库执行（带 sourcePlanId），自动 +1 useCount + 更新 lastUsedTime
+        // 这里集中做，PlanController.executePlan 不再重复，前端 plans.vue 直接调 createSession
+        // 也能享受同样的统计行为
+        bumpPlanUseCount(request.getSourcePlanId());
+
         logger.info("Session created: id={}, userId={}", session.getId(), userId);
         return session;
+    }
+
+    /**
+     * 方案 useCount +1 + 更新 lastUsedTime，sourcePlanId 为空时跳过
+     * 失败仅 warn，不影响主流程
+     */
+    private void bumpPlanUseCount(String sourcePlanId) {
+        if (!StringUtils.hasText(sourcePlanId)) return;
+        try {
+            UserPlan plan = userPlanMapper.selectById(sourcePlanId);
+            if (plan == null) return;
+            plan.setUseCount(plan.getUseCount() == null ? 1 : plan.getUseCount() + 1);
+            plan.setLastUsedTime(LocalDateTime.now());
+            userPlanMapper.updateById(plan);
+        } catch (Exception e) {
+            logger.warn("Failed to bump plan useCount: planId={}, err={}", sourcePlanId, e.getMessage());
+        }
     }
 
     /**
@@ -160,7 +187,7 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
      * @return 分页结果
      */
     public IPage<Session> listSessions(String userId, Integer pageNum,
-                                       Integer pageSize, String status) {
+                                       Integer pageSize, String status, String context) {
         LambdaQueryWrapper<Session> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(Session::getUserId, userId);
         if (StringUtils.hasText(status)) {
@@ -174,6 +201,13 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
                         .toList();
                 wrapper.in(Session::getStatus, statusList);
             }
+        }
+        // 按视图独立过滤：对话历史和选品记录两边的"隐藏"flag 完全独立
+        if ("chat".equals(context)) {
+            // hidden_from_chat 列默认 false，老数据为 null 也视为 false
+            wrapper.and(w -> w.eq(Session::getHiddenFromChat, false).or().isNull(Session::getHiddenFromChat));
+        } else if ("records".equals(context)) {
+            wrapper.and(w -> w.eq(Session::getHiddenFromRecords, false).or().isNull(Session::getHiddenFromRecords));
         }
         wrapper.orderByDesc(Session::getCreateTime);
         return page(new Page<>(pageNum, pageSize), wrapper);
@@ -195,6 +229,71 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         }
         removeById(sessionId);
         logger.info("Session removed: id={}, userId={}", sessionId, userId);
+    }
+
+    /**
+     * 从"对话历史"侧栏隐藏（不影响选品记录页）
+     * 与 hiddenFromRecords 完全独立，不触发 @TableLogic 软删
+     */
+    public void hideSessionFromChat(String sessionId, String userId) {
+        Session session = getById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话不存在: " + sessionId);
+        }
+        if (!session.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.ACCESS_UNAUTHORIZED, "无权操作该会话");
+        }
+        Session update = new Session();
+        update.setId(sessionId);
+        update.setHiddenFromChat(true);
+        update.setUpdateTime(LocalDateTime.now());
+        updateById(update);
+        logger.info("Session hidden from chat: id={}, userId={}", sessionId, userId);
+    }
+
+    /**
+     * 从"选品记录"页隐藏（不影响对话历史侧栏）
+     */
+    public void hideSessionFromRecords(String sessionId, String userId) {
+        Session session = getById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话不存在: " + sessionId);
+        }
+        if (!session.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.ACCESS_UNAUTHORIZED, "无权操作该会话");
+        }
+        Session update = new Session();
+        update.setId(sessionId);
+        update.setHiddenFromRecords(true);
+        update.setUpdateTime(LocalDateTime.now());
+        updateById(update);
+        logger.info("Session hidden from records: id={}, userId={}", sessionId, userId);
+    }
+
+    /**
+     * 重命名"对话历史"独立标题（不影响选品记录页 title）
+     * @param chatTitle 新标题；null 或空字符串视为清空，前端将 fallback 到 title
+     */
+    public void updateChatTitle(String sessionId, String userId, String chatTitle) {
+        Session session = getById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话不存在: " + sessionId);
+        }
+        if (!session.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.ACCESS_UNAUTHORIZED, "无权操作该会话");
+        }
+        String trimmed = chatTitle == null ? null : chatTitle.trim();
+        if (trimmed != null && trimmed.length() > 255) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "对话标题最长 255");
+        }
+        // 用 UpdateWrapper 显式 set 才能写入 null（直接 setChatTitle(null) + updateById 会被 MyBatis-Plus 忽略）
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Session> uw =
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
+        uw.eq(Session::getId, sessionId)
+          .set(Session::getChatTitle, (trimmed == null || trimmed.isEmpty()) ? null : trimmed)
+          .set(Session::getUpdateTime, LocalDateTime.now());
+        update(uw);
+        logger.info("Session chat title updated: id={}, chatTitle={}", sessionId, trimmed);
     }
 
     /**
@@ -330,6 +429,8 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
         response.setId(session.getId());
         response.setUserId(session.getUserId());
         response.setTitle(session.getTitle());
+        response.setChatTitle(session.getChatTitle());
+        response.setAgentThreadId(session.getAgentThreadId());
         response.setStatus(session.getStatus());
         response.setCurrentStep(session.getCurrentStep());
         response.setSourceType(session.getSourceType());

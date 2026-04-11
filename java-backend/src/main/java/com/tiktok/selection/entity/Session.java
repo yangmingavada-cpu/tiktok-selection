@@ -70,6 +70,24 @@ public class Session {
      */
     private String remark;
 
+    /**
+     * 是否从"对话历史"侧栏隐藏（不影响选品记录页）
+     * 与 hiddenFromRecords / deleteTime 完全独立
+     */
+    private Boolean hiddenFromChat;
+
+    /**
+     * 是否从"选品记录"页隐藏（不影响对话历史侧栏）
+     * 与 hiddenFromChat / deleteTime 完全独立
+     */
+    private Boolean hiddenFromRecords;
+
+    /**
+     * 对话历史独立标题，NULL 时 fallback 到 title
+     * 用户在对话历史侧栏改名只动这里，不影响选品记录页 title
+     */
+    private String chatTitle;
+
     private LocalDateTime startTime;
     private LocalDateTime completeTime;
     private LocalDateTime createTime;

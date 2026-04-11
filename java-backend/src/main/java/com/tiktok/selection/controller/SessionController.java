@@ -72,9 +72,10 @@ public class SessionController {
     public R<IPage<SessionListResponse>> listSessions(
             @RequestParam(defaultValue = "1") @Min(1) Integer pageNum,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) Integer pageSize,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String context) {
         String userId = getCurrentUserId();
-        IPage<Session> sessionPage = sessionService.listSessions(userId, pageNum, pageSize, status);
+        IPage<Session> sessionPage = sessionService.listSessions(userId, pageNum, pageSize, status, context);
 
         IPage<SessionListResponse> responsePage = sessionPage.convert(this::convertToListResponse);
         return R.ok(responsePage);
@@ -102,6 +103,35 @@ public class SessionController {
     public R<Void> removeSession(@PathVariable String id) {
         String userId = getCurrentUserId();
         sessionService.removeSession(id, userId);
+        return R.ok();
+    }
+
+    /**
+     * 从"对话历史"侧栏隐藏（不影响选品记录页）
+     */
+    @PostMapping("/{id}/hide-from-chat")
+    public R<Void> hideFromChat(@PathVariable String id) {
+        sessionService.hideSessionFromChat(id, getCurrentUserId());
+        return R.ok();
+    }
+
+    /**
+     * 从"选品记录"页隐藏（不影响对话历史侧栏）
+     */
+    @PostMapping("/{id}/hide-from-records")
+    public R<Void> hideFromRecords(@PathVariable String id) {
+        sessionService.hideSessionFromRecords(id, getCurrentUserId());
+        return R.ok();
+    }
+
+    /**
+     * 重命名"对话历史"独立标题（不影响选品记录页 title）
+     * body: { chatTitle: string | null }
+     */
+    @PatchMapping("/{id}/chat-title")
+    public R<Void> updateChatTitle(@PathVariable String id,
+                                   @RequestBody Map<String, String> body) {
+        sessionService.updateChatTitle(id, getCurrentUserId(), body.get("chatTitle"));
         return R.ok();
     }
 
@@ -350,6 +380,8 @@ public class SessionController {
         SessionListResponse response = new SessionListResponse();
         response.setId(session.getId());
         response.setTitle(session.getTitle());
+        response.setChatTitle(session.getChatTitle());
+        response.setAgentThreadId(session.getAgentThreadId());
         response.setStatus(session.getStatus());
         response.setSourceType(session.getSourceType());
         response.setCurrentStep(session.getCurrentStep());

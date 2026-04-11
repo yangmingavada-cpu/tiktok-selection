@@ -13,6 +13,7 @@
         :cache-updated-at="historyCacheUpdatedAt"
         @refresh="refreshHistorySessions"
         @delete-session="handleDeleteSessionSoft"
+        @rename-session="handleRenameChatSession"
         @restore-conversation="handleRestoreConversation"
         @create-new="resetConversation"
       />
@@ -123,11 +124,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, shallowRef, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, ref, shallowRef, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, MagicStick, Position } from '@element-plus/icons-vue'
 import { parseIntent, previewBlockChain, interpretBlockChainStream, confirmPlanDraft } from '@/api/intent'
-import { createSession, executeSession, exportSessionExcel, getSession, removeSession, saveConversationSnapshot } from '@/api/session'
+import {
+  createSession,
+  executeSession,
+  exportSessionExcel,
+  getSession,
+  getSessionSteps,
+  hideSessionFromChat,
+  saveConversationSnapshot,
+  updateSessionChatTitle,
+} from '@/api/session'
 import type { Block, PreviewResponse, Session as ApiSession } from '@/types'
 import { useUserStore } from '@/stores/user'
 import { useSessionHistory, getCachedSessionDetail } from '@/composables/useSessionHistory'
@@ -174,6 +184,8 @@ const planningSessionId = shallowRef('')
 const planningThreadId = shallowRef('')
 const planningAgentThreadId = shallowRef('')
 const planningConversationSummary = shallowRef('')
+/** 当前对话已经创建的 session id（confirmPlan 之后才有），用于 messages 自动持久化 */
+const currentSessionId = shallowRef('')
 // 方案生成后保存线程ID，供"继续调整"复用（resetPlanningThread 会清空 planningThreadId）
 const lastPlanThreadId = shallowRef('')
 const lastPlanAgentThreadId = shallowRef('')
@@ -192,6 +204,7 @@ const {
   refresh: refreshHistorySessions,
   prependSession,
   removeSessionFromHistory,
+  updateSessionInHistory,
 } = useSessionHistory(conversationCacheKey, {
   statusFilter: ['created', 'in_progress', 'paused', 'completed', 'failed'],
   cachePrefix: 'conversation-history'
@@ -204,6 +217,7 @@ function resetConversation() {
   eventSource?.close()
   eventSource = null
   execEventSource?.close()
+  execEventSource = null
   clearResultSyncLoop()
 
   messages.value = []
@@ -221,6 +235,10 @@ function resetConversation() {
   lastPlanThreadId.value = ''
   lastPlanAgentThreadId.value = ''
   archivedPlanningSessionId = ''
+  // 清理执行卡片状态，防止"恢复一条 → 新建对话"留下旧 execCard
+  resultSession.value = null
+  // 清空 currentSessionId，防止新建对话的 messages 被错误保存到老 session
+  currentSessionId.value = ''
 
   addMessage({ role: 'ai', text: GREETING, isGreeting: true })
 }
@@ -316,6 +334,106 @@ async function syncResultSession(sessionId: string) {
     if (resultSession.value?.id === sessionId) {
       resultSession.value.syncState = 'idle'
     }
+  }
+}
+
+/** 后端 SessionStep.status → ExecSession.steps[i].status；pending/skipped 不展示 */
+function mapStepDisplayStatus(status: string): 'done' | 'running' | 'fail' | null {
+  if (status === 'completed') return 'done'
+  if (status === 'failed') return 'fail'
+  if (status === 'running' || status === 'paused') return 'running'
+  return null
+}
+
+/**
+ * 扫 messages 里所有 execCardRef，并发拉取每个 sessionId 的 currentView + steps，
+ * 重建出 ExecSession 对象写回对应消息的 execCard 字段。
+ *
+ * 跨多 session 场景（同一对话里连续 confirmPlan 多次）：每个方案对应一个独立 sessionId，
+ * 后端 currentView/steps 各自存储，按 ref 并发拉取后回填到对应消息位置。
+ */
+async function rebuildAllExecCards(fullSession: ApiSession) {
+  // 1. 收集 sessionId → [messageIndex...]
+  const refs = new Map<string, number[]>()
+  messages.value.forEach((m, idx) => {
+    const sid = m.execCardRef?.sessionId
+    if (sid) {
+      const arr = refs.get(sid) ?? []
+      arr.push(idx)
+      refs.set(sid, arr)
+    }
+  })
+
+  if (refs.size === 0) return
+
+  // 2. 并发拉取每个 sessionId
+  type Built = { sessionId: string; exec: ExecSession | null }
+  const results = await Promise.allSettled(
+    Array.from(refs.keys()).map(async (sid): Promise<Built> => {
+      // 当前 fullSession 不重复请求，直接复用
+      const detail = sid === fullSession.id ? fullSession : (await getSession(sid)).data
+      if (!detail || detail.status === 'created') return { sessionId: sid, exec: null }
+
+      const exec: ExecSession = {
+        id: detail.id,
+        status: mapExecStatus(detail.status),
+        dataState: 'pending',
+        syncState: 'idle',
+        lastSyncedAt: null,
+        steps: [],
+        rows: [],
+        dims: [],
+        totalRows: 0,
+        errorMsg: null,
+      }
+
+      // 灌 currentView：applyResultCurrentView 内部硬编码读写 resultSession.value，
+      // 用临时 swap 复用它（最小侵入，避免重构 syncResultSession / openExecutionStream 等相关函数）
+      const saved = resultSession.value
+      resultSession.value = exec
+      try {
+        applyResultCurrentView(detail)
+      } finally {
+        resultSession.value = saved
+      }
+
+      // 拉 steps（失败不影响整体，只是这一条 steps 为空）
+      try {
+        const stepsRes = await getSessionSteps(detail.id)
+        exec.steps = (stepsRes.data ?? []).flatMap((s) => {
+          const display = mapStepDisplayStatus(s.status)
+          if (!display) return []
+          return [{
+            label: s.label || s.blockId,
+            status: display,
+            outputCount: s.outputCount,
+          }]
+        })
+      } catch (e) {
+        console.warn(`[restore] fetch steps failed for ${sid}:`, e)
+      }
+
+      return { sessionId: sid, exec }
+    }),
+  )
+
+  // 3. 写回到对应消息的 execCard 字段
+  for (const r of results) {
+    if (r.status !== 'fulfilled' || !r.value.exec) continue
+    const indices = refs.get(r.value.sessionId) ?? []
+    for (const idx of indices) {
+      messages.value[idx] = { ...messages.value[idx], execCard: r.value.exec }
+    }
+    // 当前恢复的 session 自身的 ExecSession 设到 resultSession.value，
+    // 让 toolbar 的"导出/查看"等按钮能识别
+    if (r.value.sessionId === fullSession.id) {
+      resultSession.value = r.value.exec
+    }
+  }
+
+  // 4. 当前 session 还在跑或暂停 → 挂 SSE 接管实时更新
+  if (fullSession.status === 'in_progress' || fullSession.status === 'paused') {
+    openExecutionStream(fullSession.id)
   }
 }
 
@@ -910,7 +1028,8 @@ async function confirmPlan(plan: unknown[], sourceText?: string) {
       prependSession(res.data)
     }
     if (sessionId) {
-      void saveConversationSnapshotToSession(sessionId)
+      // 设置 currentSessionId → 后续 messages 变化由 watch 自动 debounce 保存
+      currentSessionId.value = sessionId
       const card: ExecSession = {
         id: sessionId,
         status: 'running',
@@ -924,7 +1043,12 @@ async function confirmPlan(plan: unknown[], sourceText?: string) {
         errorMsg: null,
       }
       resultSession.value = card
-      addMessage({ role: 'ai', text: '', execCard: card })
+      // 同时塞 execCardRef，让 snapshot 持久化引用
+      addMessage({ role: 'ai', text: '', execCard: card, execCardRef: { sessionId } })
+      // 立即同步保存一次（不依赖 1s debounce）：
+      // 防止用户在 debounce 窗口内点击对话历史侧栏触发 restore，
+      // 导致刚 push 的 execCard 消息被服务器返回的旧 snapshot 覆盖
+      await saveConversationSnapshotToSession(sessionId)
       scheduleResultSync(sessionId, 300)
       openExecutionStream(sessionId)
       await executeSession(sessionId)
@@ -1000,13 +1124,34 @@ async function saveConversationSnapshotToSession(sessionId: string) {
   try {
     const snapshot = {
       messages: messages.value
-        .filter(m => m.role === 'user' || (m.role === 'ai' && (m.text || m.plan)))
-        .map(m => ({
-          role: m.role,
-          text: m.text || '',
-          plan: m.plan,
-          interpretation: typeof m.interpretation === 'string' ? m.interpretation : undefined,
-        })),
+        // 过滤：保留所有 user 消息 + 任何带有可见内容的 ai 消息
+        .filter(m =>
+          m.role === 'user' ||
+          (m.role === 'ai' && (
+            m.text || m.plan || m.planDraft || m.planningSnapshot ||
+            m.execCard || m.execCardRef
+          ))
+        )
+        .map(m => {
+          // 自动从运行时 execCard 兜底生成持久化 execCardRef
+          const ref = m.execCardRef ||
+            (m.execCard?.id ? { sessionId: m.execCard.id } : undefined)
+          return {
+            role: m.role,
+            text: m.text || '',
+            plan: m.plan,
+            planDraft: m.planDraft,
+            planningSnapshot: m.planningSnapshot,
+            summary: m.summary,
+            sourceText: m.sourceText,
+            interpretation: typeof m.interpretation === 'string' ? m.interpretation : undefined,
+            interpretationDone: m.interpretationDone,
+            // preview === 'loading' / null 是临时态，不持久化
+            preview: typeof m.preview === 'object' && m.preview ? m.preview : undefined,
+            suggestions: m.suggestions,
+            execCardRef: ref,
+          }
+        }),
       qaHistory: qaHistory.value,
       planningSummary: getLatestPlanMessage()?.summary || '',
       savedAt: new Date().toISOString(),
@@ -1016,6 +1161,28 @@ async function saveConversationSnapshotToSession(sessionId: string) {
     // 快照保存失败不影响主流程
   }
 }
+
+// ── 自动持久化：messages 任何变化都 debounce 1s 保存到后端 ─────────
+// 解决 confirmPlan 一次性 save 之后，execCard / SSE 状态变化、新增追问消息全都不再保存的问题
+let snapshotSaveTimer: number | null = null
+function scheduleSnapshotSave() {
+  if (!currentSessionId.value) return
+  if (snapshotSaveTimer !== null) {
+    window.clearTimeout(snapshotSaveTimer)
+  }
+  snapshotSaveTimer = window.setTimeout(() => {
+    snapshotSaveTimer = null
+    void saveConversationSnapshotToSession(currentSessionId.value)
+  }, 1000)
+}
+
+watch(
+  messages,
+  () => {
+    scheduleSnapshotSave()
+  },
+  { deep: true },
+)
 
 // ── Execution SSE ───────────────────────────────────
 function openExecutionStream(sessionId: string) {
@@ -1120,44 +1287,43 @@ function savePlan() {
   ElMessage.info('保存方案功能开发中')
 }
 
-async function handleDeleteHistorySession(session: ApiSession) {
-  try {
-    await ElMessageBox.confirm(
-      `确认从历史会话中移除“${session.title || '未命名任务'}”吗？`,
-      '删除历史会话',
-      {
-        type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-      },
-    )
-    await removeSession(session.id)
-    removeSessionFromHistory(session.id)
-    ElMessage.success('已从历史会话中移除')
-    void refreshHistorySessions()
-  } catch {
-    // cancelled
-  }
-}
-void handleDeleteHistorySession
-
+/**
+ * 从对话历史侧栏隐藏一条会话
+ * 只设 hidden_from_chat=true，选品记录页仍然可见
+ */
 async function handleDeleteSessionSoft(session: ApiSession) {
+  const label = session.chatTitle || session.title || '未命名任务'
   try {
     await ElMessageBox.confirm(
-      `确认将”${session.title || '未命名任务'}”从历史会话中移除吗？`,
-      '移除历史会话',
+      `确认将"${label}"从对话历史中移除吗？选品记录页仍可查看。`,
+      '移除对话历史',
       {
         type: 'warning',
         confirmButtonText: '移除',
         cancelButtonText: '取消',
       },
     )
-    await removeSession(session.id)
+    await hideSessionFromChat(session.id)
     removeSessionFromHistory(session.id)
-    ElMessage.success('已从历史会话中移除')
-    void refreshHistorySessions()
+    ElMessage.success('已从对话历史中移除')
   } catch {
     // cancelled
+  }
+}
+
+/**
+ * 重命名对话历史标题（独立于选品记录的 title）
+ */
+async function handleRenameChatSession(session: ApiSession, newTitle: string) {
+  const trimmed = newTitle.trim()
+  if (!trimmed) return
+  try {
+    await updateSessionChatTitle(session.id, trimmed)
+    updateSessionInHistory(session.id, { chatTitle: trimmed })
+    ElMessage.success('已更新对话标题')
+  } catch (e) {
+    console.warn('[new-session] rename chat title failed:', e)
+    ElMessage.error('重命名失败')
   }
 }
 
@@ -1166,6 +1332,17 @@ async function handleDeleteSessionSoft(session: ApiSession) {
  */
 async function handleRestoreConversation(session: ApiSession) {
   try {
+    // 0. 如果有 pending 的 snapshot save（confirmPlan 后 1s 内点恢复触发），
+    //    先 flush 它，避免被本次 restore 的 messages.value=[] 覆盖
+    if (snapshotSaveTimer !== null && currentSessionId.value) {
+      window.clearTimeout(snapshotSaveTimer)
+      snapshotSaveTimer = null
+      await saveConversationSnapshotToSession(currentSessionId.value)
+    }
+    // 切换到新 session 前清掉 currentSessionId，避免 messages.value=[] 触发的 watch
+    // 把空数组保存到旧 session
+    currentSessionId.value = ''
+
     // 1. 清空当前对话
     messages.value = []
     lastBlockChain.value = null
@@ -1185,26 +1362,46 @@ async function handleRestoreConversation(session: ApiSession) {
     }
 
     // 2. 从 fullSession 恢复数据
+    // agentThreadId 是 LangGraph 对话线程ID，与 session.id 不同；
+    // 必须用 fullSession.agentThreadId 才能保留 LangGraph 上下文，
+    // 否则下次 /intent/parse 会被当成新 thread。老数据为 null 时 fallback 到 session.id 兼容。
     planningThreadId.value = fullSession.id
-    planningAgentThreadId.value = fullSession.id
+    planningAgentThreadId.value = fullSession.agentThreadId || fullSession.id
     planningSessionId.value = fullSession.id
+    // 设置 currentSessionId → 后续编辑/追问 messages 由 watch 自动持续保存到这条 session
+    currentSessionId.value = fullSession.id
 
     // 3. 优先从 conversationSnapshot 恢复完整对话
     if (fullSession.conversationSnapshot?.messages?.length) {
       const snapshot = fullSession.conversationSnapshot
 
-      // 恢复所有历史消息
-      messages.value = snapshot.messages.map(msg => ({
+      // 恢复所有历史消息（含方案卡片 / 草稿卡片 / 规划进度 / preview / suggestions / execCardRef 等完整字段）
+      // snapshot 形态比 ChatMessage interface 宽松，统一 cast 成 any 处理
+      messages.value = snapshot.messages.map((msg: any) => ({
         role: msg.role,
         text: msg.text || '',
         plan: msg.plan,
+        planDraft: msg.planDraft,
+        planningSnapshot: msg.planningSnapshot,
+        summary: msg.summary,
+        sourceText: msg.sourceText,
         interpretation: msg.interpretation,
-        preview: msg.preview as any  // 类型转换，因为历史数据可能不完全匹配 PreviewResponse
+        interpretationDone: msg.interpretationDone,
+        preview: msg.preview,
+        suggestions: msg.suggestions,
+        execCardRef: msg.execCardRef,
+        // execCard 留空，由 rebuildAllExecCards 异步并发拉取后回填
       }))
 
       // 恢复 QA 历史
       if (snapshot.qaHistory) {
         qaHistory.value = snapshot.qaHistory
+      }
+
+      // 恢复 planningSummary（喂给后续 /intent/parse 的 conversation_summary 字段）
+      // 当 LangGraph Redis checkpoint TTL (2h) 过期后，Python 降级路径用它重建 compact_summary
+      if ((snapshot as any).planningSummary) {
+        planningConversationSummary.value = (snapshot as any).planningSummary
       }
 
       // 恢复 lastBlockChain
@@ -1245,11 +1442,14 @@ async function handleRestoreConversation(session: ApiSession) {
       ElMessage.success('会话已恢复')
     }
 
-    // 5. 滚动到底部
+    // 5. 重建所有执行卡片（按 messages 里的 execCardRef 并发拉取，支持跨多 session）
+    await rebuildAllExecCards(fullSession)
+
+    // 6. 滚动到底部
     await nextTick()
     scrollToBottom()
 
-    // 6. 刷新历史记录缓存（确保其他地方的修改能同步显示）
+    // 7. 刷新历史记录缓存（确保其他地方的修改能同步显示）
     void refreshHistorySessions()
   } catch (error) {
     console.error('恢复会话失败:', error)
@@ -1265,6 +1465,14 @@ onUnmounted(() => {
   finishPlanning()
   execEventSource?.close()
   clearResultSyncLoop()
+  // 在卸载前 flush 还没保存的 snapshot，避免最后一个 debounce 窗口里的修改丢失
+  if (snapshotSaveTimer !== null) {
+    window.clearTimeout(snapshotSaveTimer)
+    snapshotSaveTimer = null
+    if (currentSessionId.value) {
+      void saveConversationSnapshotToSession(currentSessionId.value)
+    }
+  }
 })
 </script>
 

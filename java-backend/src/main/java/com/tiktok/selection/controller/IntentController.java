@@ -31,8 +31,10 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class IntentController {
 
-    private static final String BLOCK_CHAIN_KEY = "block_chain";
-    private static final String NEEDS_INPUT     = "needs_input";
+    private static final String BLOCK_CHAIN_KEY      = "block_chain";
+    private static final String NEEDS_INPUT          = "needs_input";
+    /** 前端请求体里 blockChain 字段的 key（camelCase，与 snake_case 的 BLOCK_CHAIN_KEY 不同） */
+    private static final String BLOCK_CHAIN_BODY_KEY = "blockChain";
 
     private final IntentService intentService;
     private final IntentPreviewService intentPreviewService;
@@ -207,7 +209,7 @@ public class IntentController {
     @SuppressWarnings("unchecked")
     public R<Map<String, Object>> interpretBlockChain(@RequestBody Map<String, Object> body) {
         List<Map<String, Object>> blockChain = new ArrayList<>();
-        Object raw = body.get("blockChain");
+        Object raw = body.get(BLOCK_CHAIN_BODY_KEY);
         if (raw instanceof List<?> list) {
             for (Object item : list) {
                 if (item instanceof Map<?, ?> m) {
@@ -225,7 +227,7 @@ public class IntentController {
     @SuppressWarnings("unchecked")
     public SseEmitter interpretStream(@RequestBody Map<String, Object> body) {
         List<Map<String, Object>> blockChain = new ArrayList<>();
-        Object raw = body.get("blockChain");
+        Object raw = body.get(BLOCK_CHAIN_BODY_KEY);
         if (raw instanceof List<?> list) {
             for (Object item : list) {
                 if (item instanceof Map<?, ?> m) {
@@ -249,7 +251,7 @@ public class IntentController {
     @SuppressWarnings("unchecked")
     public R<IntentPreviewResponse> previewIntent(@RequestBody Map<String, Object> body) {
         List<Map<String, Object>> blockChain = new ArrayList<>();
-        Object raw = body.get("blockChain");
+        Object raw = body.get(BLOCK_CHAIN_BODY_KEY);
         if (raw instanceof List<?> list) {
             for (Object item : list) {
                 if (item instanceof Map<?, ?> m) {
@@ -258,6 +260,28 @@ public class IntentController {
             }
         }
         return R.ok(intentPreviewService.preview(blockChain));
+    }
+
+    /**
+     * 积木链质量审核：调 Python audit_agent 检查规则与 LLM 评分。
+     * 用于"方案库执行前可视化编辑"的审核闸门。
+     *
+     * @param body 包含 blockChain 字段的 JSON 对象
+     * @return {pass: boolean, score: number, issues: string[], suggestions: string[]}
+     */
+    @PostMapping("/audit")
+    @SuppressWarnings("unchecked")
+    public R<Map<String, Object>> auditIntent(@RequestBody Map<String, Object> body) {
+        List<Map<String, Object>> blockChain = new ArrayList<>();
+        Object raw = body.get(BLOCK_CHAIN_BODY_KEY);
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> m) {
+                    blockChain.add((Map<String, Object>) m);
+                }
+            }
+        }
+        return R.ok(intentService.auditBlockChain(blockChain));
     }
 
     /**

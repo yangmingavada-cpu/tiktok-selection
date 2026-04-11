@@ -29,6 +29,23 @@ export function previewBlockChain(blockChain: Block[]) {
   })
 }
 
+/**
+ * 积木链质量审核（审核闸门）：调后端 audit_agent 检查规则与 LLM 评分
+ * 返回 {pass, score, issues, suggestions}
+ */
+export interface AuditResult {
+  pass: boolean
+  score: number
+  issues: string[]
+  suggestions: string[]
+}
+
+export function auditBlockChain(blockChain: Block[]) {
+  return request.post<unknown, ApiResponse<AuditResult>>('/intent/audit', { blockChain }, {
+    timeout: TIMEOUT.INTENT_INTERPRET,
+  })
+}
+
 export function interpretBlockChain(blockChain: Block[]) {
   return request.post<unknown, ApiResponse<InterpretResponse>>('/intent/interpret', { blockChain }, {
     timeout: TIMEOUT.INTENT_INTERPRET,

@@ -25,7 +25,13 @@ export function createSession(data: SessionCreateRequest) {
   return request.post<unknown, ApiResponse<Session>>('/sessions', data)
 }
 
-export function listSessions(params: { pageNum?: number; pageSize?: number; status?: string }) {
+export function listSessions(params: {
+  pageNum?: number
+  pageSize?: number
+  status?: string
+  /** 视图上下文：'chat' 用于对话历史侧栏，'records' 用于选品记录页，会按各自隐藏 flag 过滤 */
+  context?: 'chat' | 'records'
+}) {
   return request.get<unknown, ApiResponse<PageResult<Session>>>('/sessions', { params })
 }
 
@@ -35,6 +41,28 @@ export function getSession(id: string) {
 
 export function removeSession(id: string) {
   return request.delete(`/sessions/${id}`)
+}
+
+/**
+ * 从"对话历史"侧栏隐藏（不影响选品记录页）
+ */
+export function hideSessionFromChat(id: string) {
+  return request.post(`/sessions/${id}/hide-from-chat`)
+}
+
+/**
+ * 从"选品记录"页隐藏（不影响对话历史侧栏）
+ */
+export function hideSessionFromRecords(id: string) {
+  return request.post(`/sessions/${id}/hide-from-records`)
+}
+
+/**
+ * 重命名"对话历史"独立标题，传 null 或空字符串表示清空
+ * 不影响选品记录页 title
+ */
+export function updateSessionChatTitle(id: string, chatTitle: string | null) {
+  return request.patch(`/sessions/${id}/chat-title`, { chatTitle })
 }
 
 export function updateSession(id: string, data: { title?: string; remark?: string }) {

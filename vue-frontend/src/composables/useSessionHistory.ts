@@ -122,8 +122,14 @@ export function useSessionHistory(
     loading.value = true
     try {
       // 将 statusFilter 传给后端，减少不必要的数据传输
+      // context=chat 让后端按 hidden_from_chat 过滤，跟选品记录页的 hidden_from_records 完全独立
       const statusParam = statusFilter && statusFilter.length > 0 ? statusFilter.join(',') : undefined
-      const res = await listSessions({ pageNum: 1, pageSize: CACHE_LIMIT, status: statusParam })
+      const res = await listSessions({
+        pageNum: 1,
+        pageSize: CACHE_LIMIT,
+        status: statusParam,
+        context: 'chat',
+      })
       const records = res.data?.records ?? []
 
       sessions.value = records

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ArrowRight, Clock, Delete, Plus, RefreshRight } from '@element-plus/icons-vue'
+import { computed, nextTick, ref } from 'vue'
+import { ArrowRight, Clock, Delete, Edit, Plus, RefreshRight } from '@element-plus/icons-vue'
 import type { Session } from '@/types'
 
 const props = defineProps<{
@@ -15,6 +15,7 @@ const emit = defineEmits<{
   deleteSession: [session: Session]
   restoreConversation: [session: Session]
   createNew: []
+  renameSession: [session: Session, newTitle: string]
 }>()
 
 const cacheText = computed(() => {
@@ -34,6 +35,47 @@ function openSession(session: Session) {
 
 function createNewSession() {
   emit('createNew')
+}
+
+// ── 卡片标题：fallback chatTitle → title → 占位 ────────────
+function displayTitle(session: Session): string {
+  return session.chatTitle || session.title || '未命名对话'
+}
+
+// ── 内联重命名 ──────────────────────────────────────
+const editingId = ref<string | null>(null)
+const draftTitle = ref('')
+const inputRefs = ref<Record<string, HTMLInputElement | undefined>>({})
+
+async function startRename(session: Session) {
+  editingId.value = session.id
+  draftTitle.value = displayTitle(session)
+  await nextTick()
+  const el = inputRefs.value[session.id]
+  el?.focus()
+  el?.select()
+}
+
+function commitRename(session: Session) {
+  if (editingId.value !== session.id) return
+  const next = draftTitle.value.trim()
+  editingId.value = null
+  if (next && next !== displayTitle(session)) {
+    emit('renameSession', session, next)
+  }
+}
+
+function cancelRename() {
+  editingId.value = null
+  draftTitle.value = ''
+}
+
+function setInputRef(sessionId: string, el: HTMLInputElement | null) {
+  if (el) {
+    inputRefs.value[sessionId] = el
+  } else {
+    delete inputRefs.value[sessionId]
+  }
 }
 </script>
 
@@ -77,11 +119,31 @@ function createNewSession() {
         class="history-card"
       >
         <div class="history-card-top">
-          <span class="history-card-title">{{ session.title || '未命名对话' }}</span>
+          <input
+            v-if="editingId === session.id"
+            :ref="(el) => setInputRef(session.id, el as HTMLInputElement | null)"
+            v-model="draftTitle"
+            class="history-card-title-input"
+            maxlength="80"
+            @click.stop
+            @blur="commitRename(session)"
+            @keydown.enter.prevent="commitRename(session)"
+            @keydown.esc.prevent="cancelRename"
+          />
+          <span v-else class="history-card-title">{{ displayTitle(session) }}</span>
           <div class="history-card-actions">
             <el-tag v-if="session.status === 'in_progress'" type="warning" effect="light" size="small">
               规划中
             </el-tag>
+            <el-button
+              v-if="editingId !== session.id"
+              class="history-rename"
+              circle
+              text
+              :icon="Edit"
+              title="重命名"
+              @click.stop="startRename(session)"
+            />
             <el-button
               class="history-delete"
               circle
@@ -277,13 +339,33 @@ function createNewSession() {
   gap: 6px;
 }
 
+.history-rename,
 .history-delete {
   color: #94a3b8;
+}
+
+.history-rename:hover {
+  color: #2563eb;
+  background: rgba(239, 246, 255, 0.92);
 }
 
 .history-delete:hover {
   color: #dc2626;
   background: rgba(254, 242, 242, 0.92);
+}
+
+.history-card-title-input {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.6;
+  color: #0f172a;
+  background: #ffffff;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 0;
 }
 
 .history-card-body {

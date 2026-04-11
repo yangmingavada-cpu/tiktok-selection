@@ -2,21 +2,8 @@ package com.tiktok.selection.mcp.tool;
 
 import com.tiktok.selection.mcp.ChainBuildSession;
 import com.tiktok.selection.mcp.McpObservation;
-import com.tiktok.selection.engine.annotation.request.LlmCommentAnnotationRequest;
-import com.tiktok.selection.engine.compute.request.CustomFormulaComputeRequest;
-import com.tiktok.selection.engine.compute.request.GrowthRateComputeRequest;
-import com.tiktok.selection.engine.compute.request.ProfitMarginComputeRequest;
-import com.tiktok.selection.engine.control.request.PauseWaitRequest;
-import com.tiktok.selection.engine.datasource.request.*;
-import com.tiktok.selection.engine.enrichment.request.*;
+import com.tiktok.selection.engine.schema.BlockClassRegistry;
 import com.tiktok.selection.engine.schema.SchemaGenerator;
-import com.tiktok.selection.engine.score.request.LlmSemanticScoreRequest;
-import com.tiktok.selection.engine.score.request.NumericScoreRequest;
-import com.tiktok.selection.engine.score.request.ScoreAggregateRequest;
-import com.tiktok.selection.engine.transform.request.ConditionalFilterTransformRequest;
-import com.tiktok.selection.engine.transform.request.FieldTrimTransformRequest;
-import com.tiktok.selection.engine.transform.request.SortTopNTransformRequest;
-import com.tiktok.selection.engine.traverse.request.*;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -32,23 +19,9 @@ import static com.tiktok.selection.mcp.ToolSchemaHelper.*;
 @Component
 public class ModifyBlockTool implements McpTool {
 
+    /** 复用 BlockClassRegistry 的统一注册表，避免双份维护 */
     private static final String BLOCK_PARAM_DOCS = SchemaGenerator.describeBlocks(
-            ProductListFilterRequest.class, ProductRanklistRequest.class,
-            InfluencerListFilterRequest.class, InfluencerRanklistRequest.class,
-            SellerListFilterRequest.class, SellerRanklistRequest.class,
-            VideoListFilterRequest.class, VideoRanklistRequest.class,
-            TrendingHashtagListRequest.class, KeywordInsightRequest.class,
-            InfluencerProductTraverseRequest.class, SellerProductTraverseRequest.class,
-            VideoProductTraverseRequest.class, HashtagVideoTraverseRequest.class,
-            ProductDetailEnrichmentRequest.class, ProductTrendEnrichmentRequest.class,
-            ProductCommentEnrichmentRequest.class,
-            InfluencerDetailEnrichmentRequest.class, InfluencerTrendEnrichmentRequest.class,
-            ConditionalFilterTransformRequest.class, FieldTrimTransformRequest.class,
-            SortTopNTransformRequest.class, PauseWaitRequest.class,
-            GrowthRateComputeRequest.class, ProfitMarginComputeRequest.class,
-            CustomFormulaComputeRequest.class,
-            NumericScoreRequest.class, LlmSemanticScoreRequest.class, ScoreAggregateRequest.class,
-            LlmCommentAnnotationRequest.class
+            BlockClassRegistry.allClasses()
     );
 
     @Override

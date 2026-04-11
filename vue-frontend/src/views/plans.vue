@@ -43,6 +43,13 @@
       <el-empty v-if="!loading && plans.length === 0" description="暂无保存的方案，完成一次选品后可保存为方案" />
     </el-card>
 
+    <!-- 执行前可视化编辑对话框 -->
+    <PlanEditDialog
+      v-model:visible="editDialogVisible"
+      :plan="editingPlan"
+      @executed="onPlanExecuted"
+    />
+
     <!-- 重命名弹窗 -->
     <el-dialog v-model="renameVisible" title="修改方案信息" width="440px">
       <el-form :model="renameForm" label-width="80px">
@@ -66,9 +73,10 @@ import { ref, shallowRef, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { listPlans, executePlan, updatePlan, deletePlan } from '@/api/plan'
+import { listPlans, updatePlan, deletePlan } from '@/api/plan'
 import { PAGE_SIZE } from '@/constants'
 import type { Plan } from '@/types'
+import PlanEditDialog from './plans/plan-edit-dialog.vue'
 
 const router = useRouter()
 const loading = shallowRef(false)
@@ -81,6 +89,10 @@ const renameVisible = shallowRef(false)
 const saving = shallowRef(false)
 const renameForm = reactive({ id: '', name: '', description: '' })
 
+// 执行前可视化编辑对话框
+const editDialogVisible = ref(false)
+const editingPlan = ref<Plan | null>(null)
+
 async function fetchPlans() {
   loading.value = true
   try {
@@ -92,15 +104,19 @@ async function fetchPlans() {
   }
 }
 
-async function handleExecute(row: Plan) {
-  try {
-    const res = await executePlan(row.id)
-    const sessionId = res.data?.id
-    ElMessage.success('任务已创建')
-    if (sessionId) router.push({ name: 'SessionDetail', params: { id: sessionId } })
-  } catch {
-    ElMessage.error('执行失败')
-  }
+/**
+ * 点"执行"不再直接创建 session，先弹可视化编辑对话框，
+ * 让用户调参 + 审核通过后再 createSession
+ */
+function handleExecute(row: Plan) {
+  editingPlan.value = row
+  editDialogVisible.value = true
+}
+
+function onPlanExecuted(sessionId: string) {
+  router.push({ name: 'SessionDetail', params: { id: sessionId } })
+  // 后端 createSession 已经 +1 useCount，这里主动刷新一下列表展示最新次数
+  fetchPlans()
 }
 
 function handleRename(row: Plan) {

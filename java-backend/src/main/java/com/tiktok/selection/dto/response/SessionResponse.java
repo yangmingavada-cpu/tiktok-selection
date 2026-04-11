@@ -22,6 +22,16 @@ public class SessionResponse {
 
     private String title;
 
+    /**
+     * 对话历史独立标题，NULL 时前端 fallback 到 title
+     */
+    private String chatTitle;
+
+    /**
+     * LangGraph 对话线程ID，前端恢复对话时复用
+     */
+    private String agentThreadId;
+
     private String status;
 
     private Integer currentStep;
