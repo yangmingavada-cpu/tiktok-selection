@@ -1,33 +1,39 @@
 <template>
   <el-container class="main-layout">
-    <el-aside width="248px" class="sidebar">
+    <el-aside
+      :width="collapsed ? '64px' : '248px'"
+      class="sidebar"
+      :class="{ 'sidebar--collapsed': collapsed }"
+    >
       <div class="logo">
         <div class="logo-mark">AI</div>
-        <div class="logo-copy">
+        <div v-show="!collapsed" class="logo-copy">
           <h3>选品系统</h3>
           <p>Selection Workspace</p>
         </div>
       </div>
       <el-menu
         :default-active="activeMenu"
+        :collapse="collapsed"
+        :collapse-transition="false"
         router
         class="sidebar-menu"
       >
         <el-menu-item index="/">
           <el-icon><HomeFilled /></el-icon>
-          <span>工作台</span>
+          <template #title>工作台</template>
         </el-menu-item>
         <el-menu-item index="/new">
           <el-icon><MagicStick /></el-icon>
-          <span>新建选品</span>
+          <template #title>新建选品</template>
         </el-menu-item>
         <el-menu-item index="/sessions">
           <el-icon><Document /></el-icon>
-          <span>选品记录</span>
+          <template #title>选品记录</template>
         </el-menu-item>
         <el-menu-item index="/plans">
           <el-icon><FolderOpened /></el-icon>
-          <span>方案库</span>
+          <template #title>方案库</template>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -35,6 +41,17 @@
     <el-container>
       <el-header class="header">
         <div class="header-left">
+          <el-button
+            text
+            class="collapse-toggle"
+            :title="collapsed ? '展开侧栏' : '收起侧栏'"
+            @click="toggleCollapsed"
+          >
+            <el-icon :size="18">
+              <Expand v-if="collapsed" />
+              <Fold v-else />
+            </el-icon>
+          </el-button>
           <span class="header-title">AI 选品工作区</span>
         </div>
         <div class="header-right">
@@ -52,15 +69,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { HomeFilled, Document, FolderOpened, MagicStick } from '@element-plus/icons-vue'
+import {
+  Document,
+  Expand,
+  Fold,
+  FolderOpened,
+  HomeFilled,
+  MagicStick,
+} from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const userStore = useUserStore()
 
 const activeMenu = computed(() => route.path)
+
+const SIDEBAR_COLLAPSED_KEY = 'sidebar-collapsed'
+const collapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1')
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
+}
+
+watch(collapsed, (v) => {
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, v ? '1' : '0')
+})
 
 onMounted(() => {
   if (!userStore.userId) {
@@ -82,9 +117,35 @@ onMounted(() => {
     radial-gradient(circle at top left, rgba(245, 158, 11, 0.18), transparent 24%),
     linear-gradient(180deg, #182230 0%, #243447 100%);
   padding: 22px 14px 18px;
+  overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+  transition: width 0.25s ease;
+}
+
+.sidebar--collapsed {
+  padding-inline: 8px;
+}
+
+.sidebar--collapsed .logo {
+  justify-content: center;
+  padding: 10px 0 24px;
+}
+
+/* 折叠态：el-menu 自带 collapse 宽度 64px，这里覆盖掉默认 min-width 让它贴着 aside */
+.sidebar--collapsed :deep(.el-menu--collapse) {
+  width: 100%;
+  border-right: none;
+}
+
+.sidebar--collapsed :deep(.el-menu-item) {
+  padding: 0 !important;
+  justify-content: center;
+}
+
+.sidebar--collapsed :deep(.el-menu-item .el-icon) {
+  margin-right: 0;
 }
 
 .logo {
@@ -172,6 +233,18 @@ onMounted(() => {
 .header-left {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.collapse-toggle {
+  padding: 6px 8px;
+  color: #0f172a;
+  border-radius: 8px;
+}
+
+.collapse-toggle:hover {
+  color: #0f172a;
+  background: rgba(15, 23, 42, 0.05);
 }
 
 .header-title {
@@ -197,20 +270,6 @@ onMounted(() => {
 }
 
 @media (max-width: 960px) {
-  .sidebar {
-    width: 88px !important;
-    padding-inline: 10px;
-  }
-
-  .logo-copy,
-  .sidebar-menu :deep(.el-menu-item span) {
-    display: none;
-  }
-
-  .logo {
-    justify-content: center;
-  }
-
   .header-title {
     display: none;
   }
