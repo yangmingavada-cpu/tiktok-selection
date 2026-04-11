@@ -89,8 +89,8 @@ watch(editing, async (val) => {
 })
 
 function onLabelDoubleClick() {
-  // 用户增列在终态可改名（走后端）；原始列任何状态都可本地改名
-  if (props.col.isExtra && !props.editable) return
+  // 重命名统一走后端，只在 editable 时允许
+  if (!props.editable) return
   editing.value = true
 }
 
@@ -125,8 +125,11 @@ async function onMenuCommand(cmd: string) {
   } else if (cmd === 'edit-options') {
     emit('editOptions', props.col.id)
   } else if (cmd === 'remove') {
+    const msg = props.col.isExtra
+      ? `确定删除列「${props.col.label}」？该列下所有标注会被一并清除。`
+      : `确定删除列「${props.col.label}」？该列下所有行的数据会被永久清除，该操作不可撤销。`
     try {
-      await ElMessageBox.confirm(`确定删除列「${props.col.label}」？该列下所有值会被一并清除。`, '删除列', {
+      await ElMessageBox.confirm(msg, '删除列', {
         type: 'warning',
         confirmButtonText: '删除',
         cancelButtonText: '取消',
@@ -192,9 +195,7 @@ async function onMenuCommand(cmd: string) {
           </span>
           <template #dropdown>
             <ElDropdownMenu>
-              <ElDropdownItem command="rename" :icon="Edit">
-                重命名{{ col.isExtra ? '' : '（仅本地）' }}
-              </ElDropdownItem>
+              <ElDropdownItem command="rename" :icon="Edit">重命名</ElDropdownItem>
               <ElDropdownItem
                 v-if="col.isExtra && col.type === 'tag'"
                 command="edit-options"
@@ -202,7 +203,6 @@ async function onMenuCommand(cmd: string) {
               >编辑选项</ElDropdownItem>
               <ElDropdownItem command="hide" :icon="Hide">隐藏列</ElDropdownItem>
               <ElDropdownItem
-                v-if="col.isExtra"
                 command="remove"
                 divided
                 style="color: #f56c6c"

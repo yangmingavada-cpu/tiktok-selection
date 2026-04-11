@@ -8,6 +8,7 @@ import type {
   Session,
   SessionStep,
   UserExtraCol,
+  UserExtraColsPayload,
 } from '@/types'
 import { TIMEOUT } from '@/constants'
 
@@ -139,4 +140,43 @@ export function renameExtraCol(id: string, colId: string, body: ExtraColUpdateRe
 /** DELETE /sessions/{id}/extra-cols/{colId} —— 删除增列 + 清理所有行的对应值 */
 export function removeExtraCol(id: string, colId: string) {
   return request.delete(`/sessions/${id}/extra-cols/${colId}`)
+}
+
+// ============================================================
+// 行删除 / 列删除 / 列重命名（统一入口：原始列 + 用户增列）
+// ============================================================
+
+export interface DeleteRowsResponse {
+  totalCount: number
+  deletedCount: number
+  userExtraCols: UserExtraColsPayload
+}
+
+export interface ColOperationResponse {
+  field: string
+  isExtra: boolean
+  label?: string
+}
+
+/** POST /sessions/{id}/rows:delete —— 批量删行，后端会重映射 userExtraCols.values 的 key */
+export function deleteSessionRows(id: string, rowIndices: number[]) {
+  return request.post<unknown, ApiResponse<DeleteRowsResponse>>(
+    `/sessions/${id}/rows:delete`,
+    { rowIndices },
+  )
+}
+
+/** DELETE /sessions/{id}/cols/{field} —— 删除列（原始列或用户增列） */
+export function deleteSessionCol(id: string, field: string) {
+  return request.delete<unknown, ApiResponse<ColOperationResponse>>(
+    `/sessions/${id}/cols/${encodeURIComponent(field)}`,
+  )
+}
+
+/** PATCH /sessions/{id}/cols/{field} —— 重命名列（原始列或用户增列） */
+export function renameSessionCol(id: string, field: string, label: string) {
+  return request.patch<unknown, ApiResponse<ColOperationResponse>>(
+    `/sessions/${id}/cols/${encodeURIComponent(field)}`,
+    { label },
+  )
 }

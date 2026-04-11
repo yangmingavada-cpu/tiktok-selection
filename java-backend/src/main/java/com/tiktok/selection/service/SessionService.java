@@ -10,8 +10,10 @@ import com.tiktok.selection.dto.ConversationSnapshot;
 import com.tiktok.selection.dto.request.ExtraColCreateRequest;
 import com.tiktok.selection.dto.request.ExtraColUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCellUpdateRequest;
+import com.tiktok.selection.dto.request.SessionColUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCreateRequest;
 import com.tiktok.selection.dto.request.SessionExportRequest;
+import com.tiktok.selection.dto.request.SessionRowsDeleteRequest;
 import com.tiktok.selection.dto.response.SessionResponse;
 import com.tiktok.selection.entity.Session;
 import com.tiktok.selection.entity.SessionData;
@@ -45,12 +47,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
@@ -531,33 +536,10 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
         }
 
-        Map<String, Object> extra = sd.getUserExtraCols();
-        if (extra == null) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "用户增列不存在");
-        }
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
-        Map<String, Object> target = null;
-        if (cols != null) {
-            for (Map<String, Object> col : cols) {
-                if (colId.equals(col.get("id"))) {
-                    target = col;
-                    break;
-                }
-            }
-        }
-        if (target == null) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "未找到列: " + colId);
-        }
+        Map<String, Object> target = renameExtraColInternal(sd, colId,
+                StringUtils.hasText(req.getLabel()) ? req.getLabel().trim() : null,
+                req.getOptions());
 
-        if (StringUtils.hasText(req.getLabel())) {
-            target.put("label", req.getLabel().trim());
-        }
-        if (req.getOptions() != null) {
-            target.put("options", req.getOptions());
-        }
-
-        sd.setUserExtraCols(extra);
         sd.setUpdateTime(LocalDateTime.now());
         sessionDataMapper.updateById(sd);
 
@@ -580,25 +562,221 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
             return;
         }
 
-        Map<String, Object> extra = sd.getUserExtraCols();
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
-        if (cols != null) {
-            cols.removeIf(c -> colId.equals(c.get("id")));
-        }
-        @SuppressWarnings("unchecked")
-        Map<String, Map<String, Object>> values = (Map<String, Map<String, Object>>) extra.get("values");
-        if (values != null) {
-            for (Map<String, Object> rowMap : values.values()) {
-                rowMap.remove(colId);
-            }
-        }
+        removeExtraColInternal(sd, colId);
 
-        sd.setUserExtraCols(extra);
         sd.setUpdateTime(LocalDateTime.now());
         sessionDataMapper.updateById(sd);
 
         logger.info("Extra col removed: sessionId={}, colId={}", sessionId, colId);
+    }
+
+    // ============================================================
+    // DataGrid 行删除 / 列删除 / 列重命名（原始列 + 用户增列统一入口）
+    // ============================================================
+
+    /**
+     * 批量删除行
+     * - 从 currentView.data 移除指定下标（从大到小删，避免 index shift）
+     * - 重算 totalCount
+     * - 重映射 userExtraCols.values 的 key（被删行的值丢弃，幸存行按偏移量 shift）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> deleteSessionRows(String sessionId, String userId, SessionRowsDeleteRequest req) {
+        checkEditableSession(sessionId, userId);
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        Map<String, Object> cv = sd.getCurrentView();
+        if (cv == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "当前视图为空");
+        }
+        List<Map<String, Object>> data = (List<Map<String, Object>>) cv.get("data");
+        if (data == null) {
+            data = new ArrayList<>();
+        }
+
+        // 1. 去重 + 边界校验
+        TreeSet<Integer> toDeleteDesc = new TreeSet<>(Comparator.reverseOrder());
+        for (Integer idx : req.getRowIndices()) {
+            if (idx == null || idx < 0 || idx >= data.size()) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "行下标越界: " + idx);
+            }
+            toDeleteDesc.add(idx);
+        }
+        if (toDeleteDesc.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "rowIndices 为空");
+        }
+        if (toDeleteDesc.size() >= data.size()) {
+            throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "不能删除所有行");
+        }
+
+        // 2. 从大到小删（避免 index shift）
+        int originalSize = data.size();
+        for (Integer idx : toDeleteDesc) {
+            data.remove((int) idx);
+        }
+        cv.put("data", data);
+        cv.put("totalCount", data.size());
+        sd.setCurrentView(cv);
+
+        // 3. 重映射 userExtraCols.values 的 key
+        Map<String, Object> extra = sd.getUserExtraCols();
+        if (extra != null) {
+            Map<String, Object> oldValues = (Map<String, Object>) extra.get("values");
+            if (oldValues != null && !oldValues.isEmpty()) {
+                // 从小到大的删除下标列表，用于计算每个幸存行的偏移量
+                List<Integer> deletedAsc = new ArrayList<>(toDeleteDesc);
+                Collections.reverse(deletedAsc);
+
+                Map<String, Object> newValues = new LinkedHashMap<>();
+                for (Map.Entry<String, Object> e : oldValues.entrySet()) {
+                    int oldIdx;
+                    try {
+                        oldIdx = Integer.parseInt(e.getKey());
+                    } catch (NumberFormatException ex) {
+                        continue;
+                    }
+                    if (toDeleteDesc.contains(oldIdx)) {
+                        continue; // 被删行的 values 丢弃
+                    }
+                    int shift = 0;
+                    for (int d : deletedAsc) {
+                        if (d < oldIdx) {
+                            shift++;
+                        } else {
+                            break;
+                        }
+                    }
+                    newValues.put(String.valueOf(oldIdx - shift), e.getValue());
+                }
+                extra.put("values", newValues);
+                sd.setUserExtraCols(extra);
+            }
+        }
+
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Session rows deleted: sessionId={}, deleted={}, remain={}",
+                sessionId, toDeleteDesc.size(), data.size());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalCount", data.size());
+        result.put("deletedCount", originalSize - data.size());
+        result.put("userExtraCols", sd.getUserExtraCols() != null ? sd.getUserExtraCols() : new LinkedHashMap<>());
+        return result;
+    }
+
+    /**
+     * 删除列（统一入口：原始列走 currentView.dims+data 清理，用户增列走 userExtraCols）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> deleteSessionCol(String sessionId, String userId, String field) {
+        checkEditableSession(sessionId, userId);
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        Map<String, Object> extra = sd.getUserExtraCols();
+        boolean isExtra = isUserExtraCol(extra, field);
+
+        if (isExtra) {
+            removeExtraColInternal(sd, field);
+        } else {
+            Map<String, Object> cv = sd.getCurrentView();
+            if (cv == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "当前视图为空");
+            }
+            List<Map<String, Object>> dims = (List<Map<String, Object>>) cv.get("dims");
+            if (dims == null || dims.isEmpty()) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "列定义为空");
+            }
+            if (dims.size() <= 1) {
+                throw new BusinessException(ErrorCode.INVALID_USER_INPUT, "不能删除最后一列");
+            }
+            boolean removed = dims.removeIf(d -> field.equals(d.get("id")));
+            if (!removed) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "列不存在: " + field);
+            }
+            List<Map<String, Object>> data = (List<Map<String, Object>>) cv.get("data");
+            if (data != null) {
+                for (Map<String, Object> row : data) {
+                    row.remove(field);
+                }
+            }
+            cv.put("dims", dims);
+            cv.put("data", data);
+            sd.setCurrentView(cv);
+        }
+
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Session col deleted: sessionId={}, field={}, isExtra={}", sessionId, field, isExtra);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("field", field);
+        result.put("isExtra", isExtra);
+        return result;
+    }
+
+    /**
+     * 重命名列（统一入口：原始列改 currentView.dims[i].label，用户增列改 userExtraCols.cols[i].label）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> renameSessionCol(String sessionId, String userId, String field, SessionColUpdateRequest req) {
+        checkEditableSession(sessionId, userId);
+        SessionData sd = sessionDataMapper.selectById(sessionId);
+        if (sd == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "会话数据不存在");
+        }
+
+        String newLabel = req.getLabel().trim();
+        Map<String, Object> extra = sd.getUserExtraCols();
+        boolean isExtra = isUserExtraCol(extra, field);
+
+        if (isExtra) {
+            renameExtraColInternal(sd, field, newLabel, null);
+        } else {
+            Map<String, Object> cv = sd.getCurrentView();
+            if (cv == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "当前视图为空");
+            }
+            List<Map<String, Object>> dims = (List<Map<String, Object>>) cv.get("dims");
+            if (dims == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "列定义为空");
+            }
+            Map<String, Object> target = null;
+            for (Map<String, Object> d : dims) {
+                if (field.equals(d.get("id"))) {
+                    target = d;
+                    break;
+                }
+            }
+            if (target == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "列不存在: " + field);
+            }
+            target.put("label", newLabel);
+            cv.put("dims", dims);
+            sd.setCurrentView(cv);
+        }
+
+        sd.setUpdateTime(LocalDateTime.now());
+        sessionDataMapper.updateById(sd);
+
+        logger.info("Session col renamed: sessionId={}, field={}, isExtra={}", sessionId, field, isExtra);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("field", field);
+        result.put("label", newLabel);
+        result.put("isExtra", isExtra);
+        return result;
     }
 
     /**
@@ -761,6 +939,61 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
                     "当前状态不可编辑: " + session.getStatus());
         }
         return session;
+    }
+
+    /**
+     * 从 SessionData.userExtraCols 中移除一个增列定义，并清理所有行里该列的 value。
+     * 只改内存里的 sd，不做持久化 / 不校验权限。
+     */
+    @SuppressWarnings("unchecked")
+    private void removeExtraColInternal(SessionData sd, String colId) {
+        Map<String, Object> extra = sd.getUserExtraCols();
+        if (extra == null) return;
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+        if (cols != null) {
+            cols.removeIf(c -> colId.equals(c.get("id")));
+        }
+        Map<String, Map<String, Object>> values = (Map<String, Map<String, Object>>) extra.get("values");
+        if (values != null) {
+            for (Map<String, Object> rowMap : values.values()) {
+                rowMap.remove(colId);
+            }
+        }
+        sd.setUserExtraCols(extra);
+    }
+
+    /**
+     * 修改 SessionData.userExtraCols 的某个增列定义。
+     * label 或 options 为 null 表示不动该字段。
+     * 只改内存里的 sd，不做持久化 / 不校验权限。
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> renameExtraColInternal(SessionData sd, String colId, String label, List<String> options) {
+        Map<String, Object> extra = sd.getUserExtraCols();
+        if (extra == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "用户增列不存在");
+        }
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) extra.get("cols");
+        Map<String, Object> target = null;
+        if (cols != null) {
+            for (Map<String, Object> col : cols) {
+                if (colId.equals(col.get("id"))) {
+                    target = col;
+                    break;
+                }
+            }
+        }
+        if (target == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "未找到列: " + colId);
+        }
+        if (label != null) {
+            target.put("label", label);
+        }
+        if (options != null) {
+            target.put("options", options);
+        }
+        sd.setUserExtraCols(extra);
+        return target;
     }
 
     /** 判断 field 是否属于用户增列 */

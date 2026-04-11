@@ -18,6 +18,7 @@ const {
   fetchSession, fetchSteps,
   handleSavePlan, handleExport,
   updateCell, addExtraCol, renameExtraCol, removeExtraCol,
+  deleteRows, deleteCol, renameCol,
 } = useSession(sessionId)
 
 async function handleDataGridExport(payload: ExportConfirmPayload) {
@@ -256,6 +257,9 @@ function formatBlockType(type: string): string {
           :on-add-extra-col="addExtraCol"
           :on-rename-extra-col="renameExtraCol"
           :on-remove-extra-col="removeExtraCol"
+          :on-delete-rows="deleteRows"
+          :on-delete-col="deleteCol"
+          :on-rename-col="renameCol"
           :on-export="handleDataGridExport"
         />
       </div>

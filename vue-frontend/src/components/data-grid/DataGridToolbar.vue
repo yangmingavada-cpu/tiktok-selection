@@ -14,7 +14,7 @@ import {
   ElRadioButton,
   ElRadioGroup,
 } from 'element-plus'
-import { Download, Plus, Search, View } from '@element-plus/icons-vue'
+import { Delete, Download, Plus, Search, View } from '@element-plus/icons-vue'
 
 import type { RowHeightMode } from './constants'
 import type { DataGridColumn } from '@/types'
@@ -30,6 +30,8 @@ defineProps<{
   /** 列显隐查询 */
   isVisible: (colId: string) => boolean
   editable: boolean
+  /** 是否显示"删除选中行"按钮 */
+  canDeleteSelected: boolean
 }>()
 
 const emit = defineEmits<{
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   'update:rowHeightMode': [value: RowHeightMode]
   toggleCol: [colId: string, visible: boolean]
   addExtraCol: []
+  deleteSelected: []
   export: []
 }>()
 
@@ -108,6 +111,18 @@ function onColToggle(colId: string, currentVisible: boolean) {
         </ElDropdownMenu>
       </template>
     </ElDropdown>
+
+    <!-- 删除选中行 -->
+    <ElButton
+      v-if="canDeleteSelected"
+      size="small"
+      type="danger"
+      plain
+      @click="emit('deleteSelected')"
+    >
+      <ElIcon><Delete /></ElIcon>
+      <span style="margin-left: 4px">删除 {{ selectedCount }} 行</span>
+    </ElButton>
 
     <!-- 增列 -->
     <ElButton size="small" :disabled="!editable" @click="emit('addExtraCol')">

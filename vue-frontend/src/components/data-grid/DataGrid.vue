@@ -17,7 +17,7 @@
  *   AddExtraColDialog / ExportDialog
  */
 import { computed, provide, ref, watch, type Ref } from 'vue'
-import { ElAlert } from 'element-plus'
+import { ElAlert, ElMessage, ElMessageBox } from 'element-plus'
 
 import DataGridToolbar from './DataGridToolbar.vue'
 import DataGridFrozenPane from './DataGridFrozenPane.vue'
@@ -67,10 +67,16 @@ const props = defineProps<{
   onCellEdit: (rowIndex: number, field: string, value: unknown) => Promise<void>
   /** 增列回调 */
   onAddExtraCol: (req: ExtraColCreateRequest) => Promise<void>
-  /** 改增列回调 */
+  /** 改增列回调（只用于 tag options 编辑等增列专属场景） */
   onRenameExtraCol: (colId: string, req: ExtraColUpdateRequest) => Promise<void>
-  /** 删增列回调 */
+  /** 删增列回调（兼容旧 prop，deleteCol 已能处理所有列） */
   onRemoveExtraCol: (colId: string) => Promise<void>
+  /** 删除行回调（原数组下标数组） */
+  onDeleteRows: (rowIndices: number[]) => Promise<void>
+  /** 删除列回调（统一入口：原始列 + 增列） */
+  onDeleteCol: (field: string) => Promise<void>
+  /** 重命名列回调（统一入口：原始列 + 增列） */
+  onRenameCol: (field: string, label: string) => Promise<void>
   /** 导出回调（由父组件拼装 url 实际调 api） */
   onExport: (payload: ExportConfirmPayload) => Promise<void>
 }>()
@@ -360,16 +366,10 @@ function onEndResize() {
 async function handleRename(colId: string, newLabel: string) {
   const col = mergedCols.value.find(c => c.id === colId)
   if (!col) return
-  if (col.isExtra) {
-    // 增列改名走后端
-    try {
-      await props.onRenameExtraCol(colId, { label: newLabel })
-    } catch (e) {
-      console.warn('[DataGrid] rename extra col failed:', e)
-    }
-  } else {
-    // 原始列只在前端 localStorage 改"显示名"
-    colState.setRename(colId, newLabel)
+  try {
+    await props.onRenameCol(colId, newLabel)
+  } catch (e) {
+    console.warn('[DataGrid] rename col failed:', e)
   }
 }
 
@@ -378,10 +378,45 @@ function handleHide(colId: string) {
 }
 
 async function handleRemove(colId: string) {
+  // 保护：可见列只剩 1 列时不允许删
+  if (visibleCols.value.length <= 1) {
+    ElMessage.warning('不能删除最后一列')
+    return
+  }
   try {
-    await props.onRemoveExtraCol(colId)
+    await props.onDeleteCol(colId)
+    // 被删的列如果是当前选中/编辑态，清理
+    if (selectedCell.value?.colId === colId) selectedCell.value = null
+    if (editingCell.value?.colId === colId) editingCell.value = null
+    // 被删的列如果正被排序，清掉 sort 状态
+    if (filterSort.getSortDir(colId) !== null) {
+      filterSort.clearSort()
+    }
   } catch (e) {
-    console.warn('[DataGrid] remove extra col failed:', e)
+    console.warn('[DataGrid] delete col failed:', e)
+  }
+}
+
+// ── 10b. 删除选中行 ────────────────────────────
+async function handleDeleteSelectedRows() {
+  const rowIndices = Array.from(rowSelection.selected.value)
+  if (rowIndices.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${rowIndices.length} 行？该操作不可撤销。`,
+      '删除行',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await props.onDeleteRows(rowIndices)
+    rowSelection.clear()
+    selectedCell.value = null
+    editingCell.value = null
+  } catch (e) {
+    console.warn('[DataGrid] delete rows failed:', e)
   }
 }
 
@@ -519,10 +554,12 @@ defineExpose({
       :all-cols="colState.orderedCols.value"
       :is-visible="colState.isVisible"
       :editable="editable"
+      :can-delete-selected="rowSelection.selectedCount.value > 0 && editable"
       @update:search-value="(v: string) => filterSort.search.value = v"
       @update:row-height-mode="(v: RowHeightMode) => rowHeightMode = v"
       @toggle-col="handleToggleCol"
       @add-extra-col="openAddColDialog"
+      @delete-selected="handleDeleteSelectedRows"
       @export="openExportDialog"
     />
 

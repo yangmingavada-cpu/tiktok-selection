@@ -6,8 +6,10 @@ import com.tiktok.selection.dto.ConversationSnapshot;
 import com.tiktok.selection.dto.request.ExtraColCreateRequest;
 import com.tiktok.selection.dto.request.ExtraColUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCellUpdateRequest;
+import com.tiktok.selection.dto.request.SessionColUpdateRequest;
 import com.tiktok.selection.dto.request.SessionCreateRequest;
 import com.tiktok.selection.dto.request.SessionExportRequest;
+import com.tiktok.selection.dto.request.SessionRowsDeleteRequest;
 import com.tiktok.selection.dto.response.SessionListResponse;
 import com.tiktok.selection.dto.response.SessionResponse;
 import com.tiktok.selection.dto.response.SessionStepResponse;
@@ -225,6 +227,51 @@ public class SessionController {
     public R<Void> removeExtraCol(@PathVariable String id, @PathVariable String colId) {
         sessionService.removeExtraCol(id, getCurrentUserId(), colId);
         return R.ok();
+    }
+
+    /**
+     * 批量删除行
+     * 采用 POST :delete 风格：DELETE 不能带 body，大批量行选中时 query string 会超长
+     *
+     * @param id  会话ID
+     * @param req 要删除的行下标列表
+     * @return 剩余 totalCount + deletedCount + 重映射后的 userExtraCols
+     */
+    @PostMapping("/{id}/rows:delete")
+    public R<Map<String, Object>> deleteRows(@PathVariable String id,
+                                             @Valid @RequestBody SessionRowsDeleteRequest req) {
+        return R.ok(sessionService.deleteSessionRows(id, getCurrentUserId(), req));
+    }
+
+    /**
+     * 删除列（统一入口：原始列 + 用户增列）
+     * - 原始列：从 currentView.dims 移除，同时清理每行该字段的值
+     * - 用户增列：从 userExtraCols.cols 移除，同时清理 values 里的对应 key
+     *
+     * @param id    会话ID
+     * @param field 列字段 id
+     * @return { field, isExtra }
+     */
+    @DeleteMapping("/{id}/cols/{field}")
+    public R<Map<String, Object>> deleteCol(@PathVariable String id, @PathVariable String field) {
+        return R.ok(sessionService.deleteSessionCol(id, getCurrentUserId(), field));
+    }
+
+    /**
+     * 重命名列（统一入口：原始列 + 用户增列）
+     * - 原始列：改 currentView.dims[i].label
+     * - 用户增列：改 userExtraCols.cols[i].label
+     *
+     * @param id    会话ID
+     * @param field 列字段 id
+     * @param req   新 label
+     * @return { field, label, isExtra }
+     */
+    @PatchMapping("/{id}/cols/{field}")
+    public R<Map<String, Object>> renameCol(@PathVariable String id,
+                                            @PathVariable String field,
+                                            @Valid @RequestBody SessionColUpdateRequest req) {
+        return R.ok(sessionService.renameSessionCol(id, getCurrentUserId(), field, req));
     }
 
     /**

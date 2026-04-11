@@ -4,11 +4,14 @@ import { ElMessage } from 'element-plus'
 import {
   addExtraCol as apiAddExtraCol,
   cancelSession as apiCancel,
+  deleteSessionCol as apiDeleteCol,
+  deleteSessionRows as apiDeleteRows,
   exportSessionExcel,
   getSession,
   getSessionSteps,
   removeExtraCol as apiRemoveExtraCol,
   renameExtraCol as apiRenameExtraCol,
+  renameSessionCol as apiRenameCol,
   resumeSession as apiResume,
   updateSessionCell,
   type ExportSessionParams,
@@ -304,6 +307,112 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
     }
   }
 
+  /**
+   * 批量删除行
+   * 后端会重映射 userExtraCols.values 的 key，前端直接用返回值覆盖本地状态
+   */
+  async function deleteRows(rowIndices: number[]) {
+    const id = toValue(sessionIdGetter)
+    if (!id || rowIndices.length === 0) return
+    try {
+      const res = await apiDeleteRows(id, rowIndices)
+      // 本地 tableData 按被删下标过滤（index 从小到大过滤是安全的，因为 filter 遍历原数组）
+      const toDelete = new Set(rowIndices)
+      tableData.value = tableData.value.filter((_, i) => !toDelete.has(i))
+      // userExtraCols 整体用后端返回覆盖（避免前端再算 shift 出错）
+      if (res.data?.userExtraCols) {
+        applyUserExtraCols(res.data.userExtraCols)
+      }
+      // currentView 缓存同步
+      if (currentView.value) {
+        currentView.value = {
+          ...currentView.value,
+          data: tableData.value,
+          totalCount: res.data?.totalCount ?? tableData.value.length,
+        }
+      }
+      ElMessage.success(`已删除 ${res.data?.deletedCount ?? rowIndices.length} 行`)
+    } catch (e) {
+      ElMessage.error('删除行失败')
+      throw e
+    }
+  }
+
+  /**
+   * 删除列（统一入口：自动判断原始列 / 用户增列，后端统一处理）
+   */
+  async function deleteCol(field: string) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    try {
+      const res = await apiDeleteCol(id, field)
+      const isExtra = res.data?.isExtra ?? false
+      if (isExtra) {
+        extraCols.value = extraCols.value.filter(c => c.id !== field)
+        const next: Record<string, Record<string, unknown>> = {}
+        for (const [rowKey, rowMap] of Object.entries(extraValues.value)) {
+          if (rowMap[field] !== undefined) {
+            const cleaned = { ...rowMap }
+            delete cleaned[field]
+            next[rowKey] = cleaned
+          } else {
+            next[rowKey] = rowMap
+          }
+        }
+        extraValues.value = next
+      } else {
+        tableCols.value = tableCols.value.filter(c => c.id !== field)
+        tableData.value = tableData.value.map((row) => {
+          const next = { ...row }
+          delete next[field]
+          return next
+        })
+        if (currentView.value) {
+          const dims = (currentView.value.dims || []).filter(d => d.id !== field)
+          currentView.value = {
+            ...currentView.value,
+            dims,
+            data: tableData.value,
+          }
+        }
+      }
+      ElMessage.success('已删除列')
+    } catch (e) {
+      ElMessage.error('删除列失败')
+      throw e
+    }
+  }
+
+  /**
+   * 重命名列（统一入口：自动判断原始列 / 用户增列）
+   */
+  async function renameCol(field: string, label: string) {
+    const id = toValue(sessionIdGetter)
+    if (!id) return
+    try {
+      const res = await apiRenameCol(id, field, label)
+      const isExtra = res.data?.isExtra ?? false
+      if (isExtra) {
+        extraCols.value = extraCols.value.map(c => (c.id === field ? { ...c, label } : c))
+      } else {
+        tableCols.value = tableCols.value.map(c => (c.id === field ? { ...c, label } : c))
+        if (currentView.value) {
+          const dims = (currentView.value.dims || []).map(d =>
+            d.id === field ? { ...d, label } : d,
+          )
+          currentView.value = {
+            ...currentView.value,
+            dims,
+          }
+        }
+      }
+      ElMessage.success('已更新列名')
+    } catch (e) {
+      ElMessage.error('列名保存失败')
+      throw e
+    }
+  }
+
   async function handleSavePlan(name: string, description: string): Promise<boolean> {
     try {
       await createPlan({
@@ -390,5 +499,8 @@ export function useSession(sessionIdGetter: MaybeRefOrGetter<string>) {
     addExtraCol,
     renameExtraCol,
     removeExtraCol,
+    deleteRows,
+    deleteCol,
+    renameCol,
   }
 }
