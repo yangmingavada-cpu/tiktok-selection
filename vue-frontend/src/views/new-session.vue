@@ -246,8 +246,7 @@ const historySessions = computed(() => allConversations.value)
 const showOnboarding = computed(() =>
   !thinking.value &&
   !pendingPlan.value &&
-  messages.value.length === 1 &&
-  Boolean(messages.value[0]?.isGreeting),
+  messages.value.length === 0,
 )
 
 const resultSession = ref<ExecSession | null>(null)
