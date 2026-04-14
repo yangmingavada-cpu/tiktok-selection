@@ -20,7 +20,7 @@ export const GREETING = `## 👋 你好，我是 AI 选品助手
 - 先试试下面的 **预设方案演示**
 - 熟悉之后，再直接自由描述你的需求
 
-当前开放市场：**泰国（TH）**。`
+当前开放市场：**泰国（TH）、印度尼西亚（ID）、马来西亚（MY）、越南（VN）、菲律宾（PH）、新加坡（SG）、美国（US）、英国（UK）、沙特阿拉伯（SA）、阿联酋（AE）**。`
 
 export const STARTER_CAPABILITIES: StarterCapability[] = [
   {
