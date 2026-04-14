@@ -40,7 +40,7 @@ public class CreatePlanTool implements McpTool {
                 "提交选品规划草稿，等待用户确认后再开始构建积木链。"
                 + "在完整收集用户需求后、开始构建之前调用此工具。",
                 schema(props(
-                        propReq("market",       "string", "目标市场/地区（如：泰国、美国、东南亚）"),
+                        propReq("market",       "string", "目标市场/地区（如：泰国、印尼、美国、英国、马来西亚、越南、菲律宾、新加坡、沙特、阿联酋）"),
                         propReq("category",     "string", "商品品类（如：家居、3C、美妆）"),
                         propReq("price_range",  "string", "价格区间（如：10-50美元、不限）"),
                         propOpt("filters",      "string", "核心筛选条件描述（如：近30天销量≥10、评分≥4.0）"),
