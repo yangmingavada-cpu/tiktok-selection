@@ -455,7 +455,7 @@ INSERT INTO db_core.user_tier (id, name, display_name, monthly_api_quota, monthl
 ('tier-ent-0001', 'enterprise', '企业版', -1, -1, -1, -1, -1, -1, -1, 999.00, '{"llm_scoring":true,"excel_export":true,"branch":true}', 4)
 ON CONFLICT (id) DO NOTHING;
 
--- 默认管理员 (password: admin123456)
+-- 默认管理员 (password: 123456)
 INSERT INTO db_core."user" (id, email, name, password_hash, tier_id, role, status) VALUES
 ('admin-0001-0001-0001-000000000001', 'admin@tiktok-selection.com', 'Admin', '$2a$10$c2Q6jJyJ5OoZcC8m95mn4uGyeiLdxEW2HPMKCZ2vV.R7vPZ6TwxTu', 'tier-ent-0001', 'admin', 'active')
 ON CONFLICT (id) DO NOTHING;

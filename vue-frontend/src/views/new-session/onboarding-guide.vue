@@ -28,7 +28,7 @@ const emit = defineEmits<{
       </div>
       <div class="hero-note">
         <span class="hero-note-label">当前支持</span>
-        <strong>泰国（TH）市场</strong>
+        <strong>全球 10 大市场（TH / ID / MY / VN / PH / SG / US / UK / SA / AE）</strong>
         <span>商品 / 达人 / 店铺 / 视频</span>
       </div>
     </div>

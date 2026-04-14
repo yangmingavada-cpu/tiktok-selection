@@ -148,7 +148,6 @@ import OnboardingGuide from './new-session/onboarding-guide.vue'
 import PlanningProgressBubble from './new-session/planning-progress-bubble.vue'
 import ResultDialog from './new-session/result-dialog.vue'
 import SessionHistoryRail from './new-session/session-history-rail.vue'
-import { GREETING } from './new-session/constants'
 import { answerPlanQuestion, buildPlanAdjustmentGuide, buildPlanInterpretation } from './new-session/plan-advisor'
 void answerPlanQuestion // 暂未使用，保留 import 以备后续 Type A 文字回答场景
 import type {
@@ -239,8 +238,6 @@ function resetConversation() {
   resultSession.value = null
   // 清空 currentSessionId，防止新建对话的 messages 被错误保存到老 session
   currentSessionId.value = ''
-
-  addMessage({ role: 'ai', text: GREETING, isGreeting: true })
 }
 
 // 对话历史：只显示未执行或规划中的会话
@@ -1458,7 +1455,6 @@ async function handleRestoreConversation(session: ApiSession) {
 }
 
 onMounted(() => {
-  addMessage({ role: 'ai', text: GREETING, isGreeting: true })
 })
 
 onUnmounted(() => {

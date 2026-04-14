@@ -12,15 +12,6 @@ export interface StarterPreset {
   prompt: string
 }
 
-export const GREETING = `## 👋 你好，我是 AI 选品助手
-
-我会帮你从 TikTok Shop 数据里找商品、看达人、做评分，并把你的自然语言需求规划成一套可执行的选品方案。
-
-第一次使用也没关系：
-- 先试试下面的 **预设方案演示**
-- 熟悉之后，再直接自由描述你的需求
-
-当前开放市场：**泰国（TH）、印度尼西亚（ID）、马来西亚（MY）、越南（VN）、菲律宾（PH）、新加坡（SG）、美国（US）、英国（UK）、沙特阿拉伯（SA）、阿联酋（AE）**。`
 
 export const STARTER_CAPABILITIES: StarterCapability[] = [
   {
