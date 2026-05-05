@@ -31,7 +31,7 @@ import { InfoFilled } from '@element-plus/icons-vue'
 
 import { getBlockSchemas, type BlockSchema, type BlockSchemaField } from '@/api/blockSchema'
 import { auditBlockChain, type AuditResult } from '@/api/intent'
-import { createSession } from '@/api/session'
+import { createSession, executeSession } from '@/api/session'
 import type { Block, Plan } from '@/types'
 
 const props = defineProps<{
@@ -181,7 +181,17 @@ async function handleAuditAndExecute() {
     })
     const sessionId = res.data?.id
     if (sessionId) {
-      ElMessage.success('任务已创建')
+      // 创建只是把 session 落库（status=created），需要再调 executeSession 触发异步编排器
+      try {
+        await executeSession(sessionId)
+      } catch (e) {
+        console.warn('[plan-edit] executeSession failed:', e)
+        ElMessage.error('任务已创建，但启动失败，请到详情页手动启动')
+        emit('executed', sessionId)
+        emit('update:visible', false)
+        return
+      }
+      ElMessage.success('任务已启动')
       emit('executed', sessionId)
       emit('update:visible', false)
     }
