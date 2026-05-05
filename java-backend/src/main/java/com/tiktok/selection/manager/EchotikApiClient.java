@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import io.netty.channel.ChannelOption;
@@ -34,6 +35,8 @@ public class EchotikApiClient {
 
     private static final int REQUEST_TIMEOUT_SECONDS = 30;
     private static final int CONNECT_TIMEOUT_MILLIS = 10000;
+    /** WebClient body buffer 上限：默认 256KB 不够，product/list 响应可能超过 1MB */
+    private static final int MAX_IN_MEMORY_BYTES = 16 * 1024 * 1024;
 
     /** Echotik API 响应成功码 */
     private static final int ECHOTIK_SUCCESS_CODE = 0;
@@ -46,8 +49,13 @@ public class EchotikApiClient {
     public EchotikApiClient(WebClient.Builder webClientBuilder) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS);
+        // 默认 maxInMemorySize=256KB 不够，遇到 EchoTik product/list 大响应会抛 DataBufferLimitException
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
+                .build();
         this.webClient = webClientBuilder
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .exchangeStrategies(strategies)
                 .build();
     }
 

@@ -550,9 +550,94 @@ public class BlockOrchestrator {
         session.setUpdateTime(LocalDateTime.now());
         sessionMapper.updateById(session);
 
+        // 商品名称中文翻译：在 currentView 落库前注入 product_name_zh 列
+        injectProductNameZh(finalData, finalDims);
+
         updateCurrentView(session.getId(), finalData, finalDims, null);
         log.info("Session completed: id={}, apiCalls={}, tokens={}",
                 session.getId(), totalApiCalls, totalTokens);
+    }
+
+    /**
+     * 调用 Python LLM 批量翻译商品名 + 商品描述为中文，并把 product_name_zh / desc_detail_zh
+     * 两列注入到 finalData 和 finalDims。翻译失败的字段保留原文，不阻塞主流程。
+     */
+    private void injectProductNameZh(List<Map<String, Object>> finalData,
+                                     List<Map<String, Object>> finalDims) {
+        if (finalData == null || finalData.isEmpty() || finalDims == null) {
+            return;
+        }
+        // 仅当行数据中存在 product_id + product_name 时才翻译
+        boolean translatable = finalData.stream().anyMatch(r ->
+                r.get("product_id") != null && r.get("product_name") != null);
+        if (!translatable) return;
+
+        List<Map<String, Object>> payload = new ArrayList<>(finalData.size());
+        for (Map<String, Object> row : finalData) {
+            Object pid = row.get("product_id");
+            Object name = row.get("product_name");
+            if (pid != null && name != null) {
+                Map<String, Object> item = new HashMap<>(3);
+                item.put("product_id", pid);
+                item.put("product_name", name);
+                Object desc = row.get("desc_detail");
+                if (desc != null) item.put("desc_detail", desc);
+                payload.add(item);
+            }
+        }
+        Map<String, Map<String, String>> translations;
+        try {
+            translations = intentService.translateProductTexts(payload);
+        } catch (Exception e) {
+            log.warn("Translate product texts threw: {}", e.getMessage());
+            return;
+        }
+        if (translations == null || translations.isEmpty()) return;
+
+        boolean anyDescTranslated = false;
+        for (Map<String, Object> row : finalData) {
+            Object pid = row.get("product_id");
+            if (pid == null) continue;
+            Map<String, String> entry = translations.get(String.valueOf(pid));
+            if (entry == null) continue;
+            String nameZh = entry.get("name_zh");
+            String descZh = entry.get("desc_zh");
+            if (nameZh != null && !nameZh.isBlank()) {
+                row.put("product_name_zh", nameZh);
+            }
+            if (descZh != null && !descZh.isBlank()) {
+                row.put("desc_detail_zh", descZh);
+                anyDescTranslated = true;
+            }
+        }
+
+        // 在 product_name 后面插入 product_name_zh 列
+        insertDimAfter(finalDims, "product_name", "product_name_zh", "商品名称(中)", "string");
+        if (anyDescTranslated) {
+            // 在 desc_detail 后面（若有）插入 desc_detail_zh，否则放在 product_name_zh 之后
+            String anchor = finalDims.stream().anyMatch(d -> "desc_detail".equals(d.get("id")))
+                    ? "desc_detail" : "product_name_zh";
+            insertDimAfter(finalDims, anchor, "desc_detail_zh", "商品描述(中)", "string");
+        }
+    }
+
+    private void insertDimAfter(List<Map<String, Object>> dims, String anchorId,
+                                String newId, String newLabel, String newType) {
+        boolean exists = dims.stream().anyMatch(d -> newId.equals(d.get("id")));
+        if (exists) return;
+        int idx = -1;
+        for (int i = 0; i < dims.size(); i++) {
+            if (anchorId.equals(dims.get(i).get("id"))) {
+                idx = i;
+                break;
+            }
+        }
+        Map<String, Object> dim = new LinkedHashMap<>();
+        dim.put("id", newId);
+        dim.put("label", newLabel);
+        dim.put("type", newType);
+        if (idx >= 0) dims.add(idx + 1, dim);
+        else dims.add(dim);
     }
 
     private void failSession(Session session, int totalApiCalls, long totalTokens) {
@@ -769,9 +854,10 @@ public class BlockOrchestrator {
         List<Map<String, Object>> result = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
             Map<String, Object> copy = new HashMap<>(row);
-            // region 转中文
+            // region 转中文（保留原始代码到 region_code，供商品链接拼接等场景使用）
             Object rv = copy.get("region");
             if (rv instanceof String code) {
+                copy.put("region_code", code);
                 copy.put("region", REGION_ZH.getOrDefault(code, code));
             }
             // category ID 转名称

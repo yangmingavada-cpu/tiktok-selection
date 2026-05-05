@@ -80,6 +80,17 @@ class LLMClient:
         response = await self._client.chat.completions.create(**kwargs)
         choice = response.choices[0]
 
+        # 扣除缓存命中（cached_tokens）：provider 把缓存命中也算进 prompt_tokens，
+        # 但缓存几乎不计费；用扣减后的「可计费 tokens」给上层做预算累加，避免误熔断。
+        raw_prompt = response.usage.prompt_tokens or 0
+        completion = response.usage.completion_tokens or 0
+        cached = 0
+        details = getattr(response.usage, "prompt_tokens_details", None)
+        if details is not None:
+            cached = getattr(details, "cached_tokens", 0) or 0
+        billable_prompt = max(0, raw_prompt - cached)
+        billable_total = billable_prompt + completion
+
         return {
             "content": choice.message.content,
             "tool_calls": [
@@ -93,9 +104,13 @@ class LLMClient:
                 for tc in (choice.message.tool_calls or [])
             ],
             "usage": {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": billable_prompt,
+                "completion_tokens": completion,
+                "total_tokens": billable_total,
+                # 留底原始数据，便于排查/对账
+                "raw_prompt_tokens": raw_prompt,
+                "cached_tokens": cached,
+                "raw_total_tokens": response.usage.total_tokens or 0,
             },
         }
 

@@ -87,8 +87,14 @@ public class IntentService {
         // 配置 Netty 底层超时：responseTimeout 覆盖默认值，与 Reactor .timeout() 保持一致
         HttpClient httpClient = HttpClient.create()
                 .responseTimeout(TIMEOUT);
+        // Python /intent/parse 等响应可能很大（Top100 翻译/解读结果），默认 256KB 不够
+        org.springframework.web.reactive.function.client.ExchangeStrategies strategies =
+                org.springframework.web.reactive.function.client.ExchangeStrategies.builder()
+                        .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
+                        .build();
         this.webClient = webClientBuilder
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .exchangeStrategies(strategies)
                 .build();
     }
 
@@ -266,6 +272,61 @@ public class IntentService {
             parseLogMapper.insert(entry);
         } catch (Exception ex) {
             log.warn("Failed to save intent parse log: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * 批量翻译商品文本（名称 + 描述）为中文。失败时返回空 map，调用方回退原文，不阻塞主流程。
+     *
+     * @param products 商品列表，每项含 product_id、product_name，可选 desc_detail
+     * @return product_id -> { "name_zh": "...", "desc_zh": "..." } 映射，缺失字段不会出现
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Map<String, String>> translateProductTexts(List<Map<String, Object>> products) {
+        if (products == null || products.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<Map<String, Object>> llmConfigs = llmConfigService.getActiveLlmConfigMaps();
+        if (llmConfigs.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("products", products);
+        requestBody.put("llm_config", llmConfigs.get(0));
+        if (llmConfigs.size() > 1) {
+            requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
+        }
+
+        try {
+            Map<String, Object> result = webClient.post()
+                    .uri(pythonAiBaseUrl + "/intent/translate-products")
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .timeout(Duration.ofSeconds(180))
+                    .block();
+            if (result == null) return Collections.emptyMap();
+            Object t = result.get("translations");
+            if (!(t instanceof Map<?, ?> map)) return Collections.emptyMap();
+
+            Map<String, Map<String, String>> out = new HashMap<>();
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                if (e.getKey() == null || !(e.getValue() instanceof Map<?, ?> entryMap)) continue;
+                Map<String, String> entry = new HashMap<>();
+                for (Map.Entry<?, ?> kv : entryMap.entrySet()) {
+                    if (kv.getKey() != null && kv.getValue() != null) {
+                        entry.put(String.valueOf(kv.getKey()), String.valueOf(kv.getValue()));
+                    }
+                }
+                if (!entry.isEmpty()) {
+                    out.put(String.valueOf(e.getKey()), entry);
+                }
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("Translate product texts failed: {}", e.getMessage());
+            return Collections.emptyMap();
         }
     }
 

@@ -111,7 +111,9 @@ _PROMPT_BUILD_RULES = """━━━ 构建原则 ━━━
 - 先筛后评：筛选后再评分，减少评分量
 - 数值评分优先于语义评分（省Token成本），用户明确要求语义时才用
 - 先问后建：必问信息缺失时不得开始构建
-- 用户只表达"增长快""评分高"时，优先用排序/评分表达需求，不要自动塞入过高的默认筛选值"""
+- 用户只表达"增长快""评分高"时，优先用排序/评分表达需求，不要自动塞入过高的默认筛选值
+- 调用 select_product_source（product_listing 模式）时，默认带上 min_total_sale_30d_cnt=200，
+  避免拉到大量 0 销量商品；除非用户明确说"不限销量"或"看冷启动商品"才不传"""
 
 _PROMPT_FINALIZE = """━━━ finalize_chain 的 summary 写法 ━━━
 必须用普通人能看懂的大白话，禁止出现字段名（如 total_sale_cnt）或技术术语（如 blockId）。
@@ -460,16 +462,32 @@ class AgentService:
         *,
         session_id: str | None = None,
     ) -> tuple[int, int, int]:
+        """
+        归一化 LLM 响应里的 token 计数，用于预算守门。
+
+        关键修正：provider 会把 cache_read（缓存命中、计费近乎免费）算进 input_tokens，
+        导致执行预算被夸大几个数量级（曾观测到 reported=2.5M 但 estimated=1.6K）。
+        这里把 cache_read 从 input 扣掉，得到「真实计费 tokens」用于预算累加。
+        """
         usage = response.usage_metadata or {}
         estimated_prompt, estimated_completion, estimated_total = AgentService._estimate_usage_tokens(messages, response)
 
         def _to_int(value: object) -> int:
             return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
 
-        prompt_tokens = _to_int(usage.get("input_tokens"))
+        raw_prompt = _to_int(usage.get("input_tokens"))
         completion_tokens = _to_int(usage.get("output_tokens"))
-        total_tokens = _to_int(usage.get("total_tokens"))
 
+        # 扣除缓存命中：langchain 的 usage_metadata 里 cache_read 在 input_token_details 下
+        cache_read = 0
+        details = usage.get("input_token_details")
+        if isinstance(details, dict):
+            cache_read = _to_int(details.get("cache_read")) + _to_int(details.get("cache_creation"))
+
+        prompt_tokens = max(0, raw_prompt - cache_read)
+        total_tokens = prompt_tokens + completion_tokens
+
+        # 仍保留一道宽松的离群检测：扣掉缓存后还远超本地估算才算可疑
         suspicious = (
             total_tokens <= 0
             or total_tokens > max(estimated_total * 12, 50_000)
@@ -478,12 +496,18 @@ class AgentService:
         )
         if suspicious:
             logger.warning(
-                "Suspicious token usage from provider session=%s reported=%s estimated_total=%s",
-                session_id,
-                usage,
-                estimated_total,
+                "Suspicious token usage from provider session=%s reported=%s cache_read=%s "
+                "adjusted=(prompt=%s, completion=%s, total=%s) estimated_total=%s",
+                session_id, usage, cache_read,
+                prompt_tokens, completion_tokens, total_tokens, estimated_total,
             )
             return estimated_prompt, estimated_completion, estimated_total
+
+        if cache_read > 0 and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Token usage cache adjustment session=%s raw_prompt=%s cache_read=%s -> billable=%s",
+                session_id, raw_prompt, cache_read, prompt_tokens,
+            )
 
         return prompt_tokens, completion_tokens, total_tokens
 
