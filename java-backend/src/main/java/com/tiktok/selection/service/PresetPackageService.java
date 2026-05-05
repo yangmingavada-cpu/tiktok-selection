@@ -44,6 +44,13 @@ public class PresetPackageService extends ServiceImpl<PresetPackageMapper, Prese
                 .orderByAsc(PresetPackage::getSortOrder));
     }
 
+    /**
+     * 查询所有已启用的预设套餐 VO 列表（供用户端 /api/preset-packages 接口）
+     */
+    public List<PresetPackageVO> listActiveVO() {
+        return listActive().stream().map(this::toVO).toList();
+    }
+
     // ==================== 管理员 CRUD ====================
 
     /**

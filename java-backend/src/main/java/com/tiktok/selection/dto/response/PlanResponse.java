@@ -25,4 +25,9 @@ public class PlanResponse {
     private LocalDateTime lastUsedTime;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
+
+    /** 来源类型：preset / blank / clone */
+    private String sourceType;
+    /** 若来源是官方方案，记录预设 ID（前端用于显示「源自官方」徽标） */
+    private String sourcePresetId;
 }

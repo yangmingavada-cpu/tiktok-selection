@@ -51,6 +51,16 @@ public class PlanController {
         return R.ok(toResponse(plan));
     }
 
+    /**
+     * 从官方方案库克隆一份到当前用户的方案
+     */
+    @PostMapping("/from-preset/{presetId}")
+    public R<PlanResponse> createFromPreset(@PathVariable String presetId) {
+        String userId = getCurrentUserId();
+        UserPlan plan = userPlanService.createFromPreset(userId, presetId);
+        return R.ok(toResponse(plan));
+    }
+
     @GetMapping("/{id}")
     public R<PlanResponse> getPlan(@PathVariable String id) {
         String userId = getCurrentUserId();
@@ -123,6 +133,8 @@ public class PlanController {
         r.setLastUsedTime(plan.getLastUsedTime());
         r.setCreateTime(plan.getCreateTime());
         r.setUpdateTime(plan.getUpdateTime());
+        r.setSourceType(plan.getSourceType());
+        r.setSourcePresetId(plan.getSourcePresetId());
         return r;
     }
 }

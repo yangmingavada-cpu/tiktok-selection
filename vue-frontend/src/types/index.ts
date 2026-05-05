@@ -194,9 +194,29 @@ export interface Plan {
   blockChain: Block[]
   tags: string[]
   sourceType: string
+  /** 若来源是官方方案，记录预设 ID，前端用于显示「源自官方」徽标 */
+  sourcePresetId?: string
   useCount: number
   createTime: string
   updateTime: string
+}
+
+// ============================================================
+// PresetPackage（官方方案库）
+// ============================================================
+export interface PresetPackage {
+  id: string
+  pkgCode: string
+  nameZh: string
+  nameEn?: string
+  description?: string
+  blockChain: Block[]
+  tags?: string[]
+  useCount: number
+  active: boolean
+  sortOrder: number
+  createTime?: string
+  updateTime?: string
 }
 
 // ============================================================

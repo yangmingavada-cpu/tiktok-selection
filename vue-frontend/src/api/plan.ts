@@ -32,3 +32,8 @@ export function deletePlan(id: string) {
 export function executePlan(id: string) {
   return request.post<unknown, ApiResponse<Session>>(`/plans/${id}/execute`)
 }
+
+/** 从官方方案库克隆一份到当前用户的方案 */
+export function createPlanFromPreset(presetId: string) {
+  return request.post<unknown, ApiResponse<Plan>>(`/plans/from-preset/${presetId}`)
+}
