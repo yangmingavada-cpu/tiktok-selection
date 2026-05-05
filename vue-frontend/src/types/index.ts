@@ -202,24 +202,6 @@ export interface Plan {
 }
 
 // ============================================================
-// PresetPackage（官方方案库）
-// ============================================================
-export interface PresetPackage {
-  id: string
-  pkgCode: string
-  nameZh: string
-  nameEn?: string
-  description?: string
-  blockChain: Block[]
-  tags?: string[]
-  useCount: number
-  active: boolean
-  sortOrder: number
-  createTime?: string
-  updateTime?: string
-}
-
-// ============================================================
 // Admin — Tiers
 // ============================================================
 export interface Tier {
