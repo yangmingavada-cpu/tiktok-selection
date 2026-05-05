@@ -24,14 +24,14 @@ public class ProductListFilterRequest {
 
     public static final List<String> OUTPUT_FIELDS = List.of(
         // 基础信息
-        "product_id", "product_name", "region",
+        "product_id", "product_name", "desc_detail", "region",
         "category_id", "category_l2_id", "category_l3_id",
         "min_price", "max_price", "spu_avg_price", "discount",
         "free_shipping", "is_s_shop", "off_mark",
         "product_rating", "review_count",
         "product_commission_rate",
         "sales_flag", "sales_trend_flag",
-        "seller_id", "cover_url", "first_crawl_dt", "last_crawl_dt",
+        "seller_id", "cover_url", "skus", "first_crawl_dt", "last_crawl_dt",
         "total_ifl_cnt",
 
         // 总销量/GMV

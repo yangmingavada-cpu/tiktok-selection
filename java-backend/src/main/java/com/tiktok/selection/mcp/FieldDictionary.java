@@ -60,14 +60,14 @@ public final class FieldDictionary {
 
     public static final List<String> PRODUCT_LIST_FIELDS = List.of(
             // 基础信息
-            "product_id", "product_name", "region",
+            "product_id", "product_name", "desc_detail", "region",
             "category_id", "category_l2_id", "category_l3_id",
             "min_price", "max_price", "spu_avg_price", "discount",
             "free_shipping", "is_s_shop", "off_mark",
             "product_rating", "review_count",
             "product_commission_rate",
             "sales_flag", "sales_trend_flag",
-            "seller_id", "cover_url", "first_crawl_dt", "last_crawl_dt",
+            "seller_id", "cover_url", "skus", "first_crawl_dt", "last_crawl_dt",
             "total_ifl_cnt",
 
             // 总销量/GMV（全量）
@@ -107,7 +107,12 @@ public final class FieldDictionary {
             // 基础
             Map.entry("product_id",                "商品ID"),
             Map.entry("product_name",              "商品名称"),
+            Map.entry("product_name_zh",           "商品名称(中)"),
+            Map.entry("desc_detail",               "商品描述"),
+            Map.entry("desc_detail_zh",            "商品描述(中)"),
+            Map.entry("skus",                      "商品规格"),
             Map.entry("region",                    "地区代码"),
+            Map.entry("region_code",               "地区代码"),
             Map.entry("category_id",               "一级品类ID"),
             Map.entry("category_l2_id",            "二级品类ID"),
             Map.entry("category_l3_id",            "三级品类ID"),
@@ -168,7 +173,30 @@ public final class FieldDictionary {
             // 播放量
             Map.entry("total_views_cnt",           "总视频播放量"),
             Map.entry("total_views_7d_cnt",        "近7日视频播放量增量"),
-            Map.entry("total_views_30d_cnt",       "近30日视频播放量增量")
+            Map.entry("total_views_30d_cnt",       "近30日视频播放量增量"),
+            // 派生字段（小龙虾样板：THB 价格 / 利润 / 物流）
+            Map.entry("min_price_thb",             "最低价格(泰铢)"),
+            Map.entry("max_price_thb",             "最高价格(泰铢)"),
+            Map.entry("spu_avg_price_thb",         "SKU均价(泰铢)"),
+            Map.entry("logistics_cost_thb",        "物流成本(泰铢)"),
+            Map.entry("supply_cost_thb",           "供应链成本(泰铢)"),
+            Map.entry("tiktok_commission_thb",     "TikTok佣金(泰铢)"),
+            Map.entry("net_profit_thb",            "净利润(泰铢)"),
+            Map.entry("net_margin_pct",            "净毛利率(%)"),
+            Map.entry("growth_rate",               "增长率"),
+            Map.entry("product_link",              "商品链接"),
+            // 五维度评分
+            Map.entry("dim1_growth_score",         "维度1:销量增长动能"),
+            Map.entry("dim2_profit_score",         "维度2:盈利模型健康度"),
+            Map.entry("dim3_reputation_score",     "维度3:用户口碑与真实性"),
+            Map.entry("dim4_localization_score",   "维度4:泰国本地化适配性"),
+            Map.entry("dim5_compliance_score",     "维度5:平台合规风险"),
+            Map.entry("total_score",               "总分"),
+            // AI 标注字段
+            Map.entry("ai_recommendation",         "AI选品建议"),
+            Map.entry("advantage_tags",            "优势标签"),
+            Map.entry("risk_warning",              "风险提示"),
+            Map.entry("suggested_action",          "建议操作")
     );
 
     // ==================== 达人字段（52个）====================
