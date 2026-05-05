@@ -28,7 +28,11 @@ const emit = defineEmits<{
       </div>
       <div class="hero-note">
         <span class="hero-note-label">当前支持</span>
-        <strong>全球 10 大市场（TH / ID / MY / VN / PH / SG / US / UK / SA / AE）</strong>
+        <strong>全球 10 大市场</strong>
+        <span class="market-list">
+          泰国 TH · 印尼 ID · 马来 MY · 越南 VN · 菲律宾 PH ·
+          新加坡 SG · 美国 US · 英国 UK · 沙特 SA · 阿联酋 AE
+        </span>
         <span>商品 / 达人 / 店铺 / 视频</span>
       </div>
     </div>
@@ -182,6 +186,12 @@ const emit = defineEmits<{
 .hero-note strong {
   font-size: 18px;
   color: #0f172a;
+}
+
+.market-list {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #475569;
 }
 
 .section {

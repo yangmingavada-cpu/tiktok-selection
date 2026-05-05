@@ -60,6 +60,14 @@ public class SelectProductSourceTool implements McpTool {
                                 "品类关键词（如'家居'、'美妆'、'护肤'），Server自动匹配为对应品类参数，支持一二三级品类"),
                         propOpt("price_min", "number", "最低价格(USD)"),
                         propOpt("price_max", "number", "最高价格(USD)"),
+                        propOpt("min_total_sale_30d_cnt", "integer",
+                                "近30天销量最小值，强烈建议设置（如200），避免拉到 0 销量商品；" +
+                                "仅 product_listing 模式生效"),
+                        propOpt("max_total_sale_30d_cnt", "integer",
+                                "近30天销量最大值（如30000），缩小数据范围；仅 product_listing 模式生效"),
+                        propOpt("sales_trend_flag", "integer",
+                                "近7天销售趋势：1=上升 2=下降 3=平稳；想筛'增长中'商品时设为 1；" +
+                                "仅 product_listing 模式生效"),
                         propOpt("ranking_type", "string", "榜单类型，product_ranking时必填",
                                 List.of("hot_sale", "hot_promotion")),
                         propOpt("ranking_period", "string", "榜单周期，product_ranking时必填",
@@ -109,6 +117,14 @@ public class SelectProductSourceTool implements McpTool {
             Object priceMax = args.get("price_max");
             if (priceMin != null) config.put("min_spu_avg_price", priceMin);
             if (priceMax != null) config.put("max_spu_avg_price", priceMax);
+
+            // 30天销量范围 + 销售趋势（避免拉到 0 销量商品）
+            Object min30 = args.get("min_total_sale_30d_cnt");
+            Object max30 = args.get("max_total_sale_30d_cnt");
+            Object trend = args.get("sales_trend_flag");
+            if (min30 != null) config.put("min_total_sale_30d_cnt", min30);
+            if (max30 != null) config.put("max_total_sale_30d_cnt", max30);
+            if (trend != null) config.put("sales_trend_flag", trend);
         } else {
             // 榜单参数
             Object rawDateList = args.get("ranking_date_list");

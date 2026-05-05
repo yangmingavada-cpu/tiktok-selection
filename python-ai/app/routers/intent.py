@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 
@@ -407,6 +408,118 @@ async def competitor_stream(request: CompetitorRequest):
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ─── 商品名称中文翻译端点 ────────────────────────────────────────────────────
+
+
+class TranslateProductsRequest(BaseModel):
+    products: list[dict] = Field(
+        ...,
+        description="待翻译商品列表，每项含 product_id、product_name，可选 desc_detail",
+    )
+    llm_config: LlmConfig | None = Field(None, description="LLM连接配置")
+    llm_config_fallbacks: list[LlmConfig] | None = Field(None, description="备选LLM配置列表")
+
+
+class TranslateProductsResponse(BaseModel):
+    success: bool
+    translations: dict = Field(
+        default_factory=dict,
+        description="product_id -> { name_zh, desc_zh } 映射，缺失字段回退原文",
+    )
+    message: str = ""
+
+
+_TRANSLATE_SYSTEM_PROMPT = (
+    "你是商品文本翻译助手。把每条商品的名称（name）和描述（desc）翻译成中文。\n"
+    "规则：\n"
+    "- 名称：保留品牌名英文，省略冗余营销词，20 字以内\n"
+    "- 描述：如果输入是 JSON 字符串，先提取 text 字段；输出纯中文文本（去掉 JSON 结构），80 字以内\n"
+    "- 描述为空字符串时，zh_desc 也输出空字符串\n"
+    "严格按 JSON 数组返回，与输入顺序一一对应，格式：\n"
+    '[{"id":"...","name_zh":"...","desc_zh":"..."}]，不要额外文字。'
+)
+
+
+def _extract_desc_text(raw: str) -> str:
+    """desc_detail 可能是 JSON 字符串（含 [{type:'text', text:'...'}, ...]）；提取所有 text 拼接。"""
+    if not raw:
+        return ""
+    raw = str(raw).strip()
+    if not raw.startswith("["):
+        return raw
+    try:
+        items = json.loads(raw)
+        parts = [str(it.get("text", "")) for it in items if isinstance(it, dict)]
+        return " ".join(p for p in parts if p).strip()
+    except Exception:
+        return raw
+
+
+@router.post("/translate-products", response_model=TranslateProductsResponse)
+async def translate_products(request: TranslateProductsRequest):
+    """
+    批量翻译商品名 + 商品描述为中文。
+    返回 product_id -> {name_zh, desc_zh} 映射；翻译失败的商品不会出现在 map 中。
+    """
+    if not request.products:
+        return TranslateProductsResponse(success=True, translations={})
+
+    configs = _build_config_list(request.llm_config, request.llm_config_fallbacks)
+    if not configs:
+        return TranslateProductsResponse(
+            success=False, translations={}, message="未配置 LLM"
+        )
+
+    llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=6000)
+
+    batch_size = 30
+    translations: dict[str, dict] = {}
+
+    for start in range(0, len(request.products), batch_size):
+        batch = request.products[start:start + batch_size]
+        items_json = json.dumps(
+            [
+                {
+                    "id": str(p.get("product_id", "")),
+                    "name": str(p.get("product_name", "")),
+                    "desc": _extract_desc_text(p.get("desc_detail", "")),
+                }
+                for p in batch
+            ],
+            ensure_ascii=False,
+        )
+        try:
+            resp = await llm.ainvoke([
+                {"role": "system", "content": _TRANSLATE_SYSTEM_PROMPT},
+                {"role": "user", "content": items_json},
+            ])
+            text = (resp.content or "").strip()
+            m = re.search(r'\[[\s\S]*\]', text)
+            if not m:
+                logger.warning("translate batch: no JSON array in response")
+                continue
+            parsed = json.loads(m.group())
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                pid = str(item.get("id", ""))
+                if not pid:
+                    continue
+                entry: dict = {}
+                name_zh = str(item.get("name_zh", "")).strip()
+                desc_zh = str(item.get("desc_zh", "")).strip()
+                if name_zh:
+                    entry["name_zh"] = name_zh
+                if desc_zh:
+                    entry["desc_zh"] = desc_zh
+                if entry:
+                    translations[pid] = entry
+        except Exception as e:
+            logger.warning("translate batch failed (start=%d): %s", start, e)
+
+    return TranslateProductsResponse(success=True, translations=translations)
 
 
 # ─── LLM 配置测试端点 ────────────────────────────────────────────────────────

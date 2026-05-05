@@ -22,6 +22,29 @@ const resultState = computed(() => {
   return 'empty'
 })
 
+const PRODUCT_LINK_DIM = { id: '__product_link__', label: '商品链接', type: 'link' }
+const PRICE_DIM_IDS = new Set(['min_price', 'max_price', 'spu_avg_price'])
+
+// 在价格列前插入"商品链接"虚拟列；行数据里没有 product_id/region 时不渲染链接
+const displayDims = computed(() => {
+  if (!props.session) return [] as ExecSession['dims']
+  const dims = [...props.session.dims]
+  const hasProductId = dims.some(d => d.id === 'product_id')
+  if (!hasProductId) return dims
+  const priceIdx = dims.findIndex(d => PRICE_DIM_IDS.has(d.id))
+  if (priceIdx >= 0) dims.splice(priceIdx, 0, PRODUCT_LINK_DIM)
+  else dims.push(PRODUCT_LINK_DIM)
+  return dims
+})
+
+function buildProductLink(row: Record<string, unknown>): string | null {
+  const pid = row['product_id']
+  // region 在后端 translateForDisplay 后已被翻成中文，优先用 region_code（原始 ISO 代码）
+  const region = row['region_code'] ?? row['region']
+  if (!pid || !region) return null
+  return `https://www.tiktok.com/view/product/${pid}?share_region=${region}&utm_source=copy`
+}
+
 const doneSteps = computed(() => props.session?.steps.filter(step => step.status === 'done').length ?? 0)
 const totalSteps = computed(() => props.session?.steps.length ?? 0)
 const latestStep = computed(() => props.session?.steps.at(-1)?.label || '后台正在准备结果数据')
@@ -144,12 +167,24 @@ function formatCell(value: unknown, type: string): string {
               <table class="result-full-table">
                 <thead>
                   <tr>
-                    <th v-for="dim in session.dims" :key="dim.id">{{ dim.label }}</th>
+                    <th v-for="dim in displayDims" :key="dim.id">{{ dim.label }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="(row, rowIndex) in session.rows" :key="rowIndex">
-                    <td v-for="dim in session.dims" :key="dim.id">{{ formatCell(row[dim.id], dim.type) }}</td>
+                    <td v-for="dim in displayDims" :key="dim.id">
+                      <template v-if="dim.type === 'link'">
+                        <a
+                          v-if="buildProductLink(row)"
+                          :href="buildProductLink(row) ?? '#'"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="product-link"
+                        >查看商品</a>
+                        <span v-else>-</span>
+                      </template>
+                      <template v-else>{{ formatCell(row[dim.id], dim.type) }}</template>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -468,6 +503,16 @@ function formatCell(value: unknown, type: string): string {
 
 .result-full-table tbody tr:hover td {
   background: rgba(239, 246, 255, 0.6);
+}
+
+.product-link {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.product-link:hover {
+  text-decoration: underline;
 }
 
 .empty {

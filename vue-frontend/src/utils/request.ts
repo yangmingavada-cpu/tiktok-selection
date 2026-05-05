@@ -8,6 +8,18 @@ const request = axios.create({
   timeout: TIMEOUT.DEFAULT,
 })
 
+let authExpiredHandled = false
+function handleAuthExpired() {
+  if (authExpiredHandled) return
+  authExpiredHandled = true
+  ElMessage.warning('登录已失效，请重新登录')
+  localStorage.removeItem(STORAGE_KEY.TOKEN)
+  localStorage.removeItem(STORAGE_KEY.USER_ROLE)
+  router.push('/login').finally(() => {
+    setTimeout(() => { authExpiredHandled = false }, 1500)
+  })
+}
+
 request.interceptors.request.use((config) => {
   const token = localStorage.getItem(STORAGE_KEY.TOKEN)
   if (token) {
@@ -24,11 +36,10 @@ request.interceptors.response.use(
     }
     const res = response.data
     if (res.code !== '00000') {
-      ElMessage.error(res.message || '请求失败')
       if (res.code === 'A0230') {
-        localStorage.removeItem(STORAGE_KEY.TOKEN)
-        localStorage.removeItem(STORAGE_KEY.USER_ROLE)
-        router.push('/login')
+        handleAuthExpired()
+      } else {
+        ElMessage.error(res.message || '请求失败')
       }
       return Promise.reject(new Error(res.message))
     }
@@ -36,9 +47,8 @@ request.interceptors.response.use(
   },
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem(STORAGE_KEY.TOKEN)
-      localStorage.removeItem(STORAGE_KEY.USER_ROLE)
-      router.push('/login')
+      handleAuthExpired()
+      return Promise.reject(error)
     }
     const msg = error.response?.data?.message || error.message || '网络错误'
     ElMessage.error(msg)

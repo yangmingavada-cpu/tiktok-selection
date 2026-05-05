@@ -930,6 +930,9 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
             }
         }
 
+        // 2.5 注入合成"商品链接"列：当 dims 包含 product_id 时，在第一个价格列前插入 product_link 列
+        injectProductLinkColumn(mergedCols, mergedRows);
+
         // 3. 应用 rowIndices 过滤
         if (StringUtils.hasText(req.getRowIndices())) {
             Set<Integer> wanted = new HashSet<>();
@@ -1025,6 +1028,49 @@ public class SessionService extends ServiceImpl<SessionMapper, Session> {
     }
 
     // ──── Private helpers ────────────────────────────────────────
+
+    private static final Set<String> PRICE_COL_IDS = Set.of("min_price", "max_price", "spu_avg_price");
+    private static final String PRODUCT_LINK_TEMPLATE =
+            "https://www.tiktok.com/view/product/%s?share_region=%s&utm_source=copy";
+
+    /**
+     * 当列定义包含 product_id 时，向 mergedCols 注入合成"商品链接"列（位于第一个价格列前），
+     * 并为每行根据 product_id + region 计算链接值。
+     */
+    private void injectProductLinkColumn(List<Map<String, Object>> mergedCols,
+                                         List<Map<String, Object>> mergedRows) {
+        boolean hasProductId = mergedCols.stream()
+                .anyMatch(c -> "product_id".equals(c.get("id")));
+        if (!hasProductId) return;
+
+        Map<String, Object> linkCol = new LinkedHashMap<>();
+        linkCol.put("id", "product_link");
+        linkCol.put("label", "商品链接");
+        linkCol.put("type", "string");
+
+        int priceIdx = -1;
+        for (int i = 0; i < mergedCols.size(); i++) {
+            if (PRICE_COL_IDS.contains(String.valueOf(mergedCols.get(i).get("id")))) {
+                priceIdx = i;
+                break;
+            }
+        }
+        if (priceIdx >= 0) {
+            mergedCols.add(priceIdx, linkCol);
+        } else {
+            mergedCols.add(linkCol);
+        }
+
+        for (Map<String, Object> row : mergedRows) {
+            Object pid = row.get("product_id");
+            // region 经 translateForDisplay 已被翻成中文，优先取 region_code 兜底字段
+            Object region = row.get("region_code");
+            if (region == null) region = row.get("region");
+            if (pid != null && region != null) {
+                row.put("product_link", String.format(PRODUCT_LINK_TEMPLATE, pid, region));
+            }
+        }
+    }
 
     /** 校验会话归属 + 状态白名单，返回会话实体 */
     private Session checkEditableSession(String sessionId, String userId) {
