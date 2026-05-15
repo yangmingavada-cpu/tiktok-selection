@@ -2,7 +2,13 @@
 -- 官方方案：TikTok 泰国 TOP100 选品样板（小龙虾工作流）
 -- 来源：/home/openclaw/.openclaw/workspace/TikTok泰国选品自动化流程.md
 -- 写入到 db_platform.preset_package，用户在 /plans「官方方案库」tab 可见
--- 注意：blockId 必须用规范长名（如 SOURCE_PRODUCT_LIST），DS01/FT01 短码已废弃。
+--
+-- 设计要点：
+--   * 把贵的 SCORE_SEMANTIC × 2 和 ANNOTATE_LLM_COMMENT 放在 SORT_TOPN 之后，
+--     只对 Top 100 候选做语义评分和 AI 评语，避免对 800+ 原始数据做 LLM 调用
+--     （前一版本对 794 条做语义评分耗 380 万 tokens / 2 小时，被预算熔断）
+--   * 数值评分（销量增长 + 用户口碑）零 LLM 成本，对全量做
+--   * 一轮"数值评分聚合 → 取 Top 100 → 再做语义评分 → 重新聚合 4 维分"
 -- ============================================================
 
 INSERT INTO db_platform.preset_package (
@@ -12,7 +18,7 @@ INSERT INTO db_platform.preset_package (
     'TIKTOK_TH_TOP100',
     'TikTok 泰国 TOP100 选品样板',
     'TikTok Thailand TOP100 Sample',
-    '复刻"TikTok 泰国选品自动化流程": region=TH, category=601450(三级品类), 价格 3-50 USD, 30 天销量 200-30000, 销售趋势上升; 两轮筛选(评分 >= 4.0 / 15 天销量 > 120); 四维评分(销量动能 + 用户口碑 + 本地化适配 + 合规风险) + AI 选品评语; 输出 Top100。',
+    '复刻"TikTok 泰国选品自动化流程": region=TH, category=601450, 价格 3-50 USD, 30 天销量 200-30000, 销售趋势上升; 两轮筛选(评分/销量); 先用销量增长 + 口碑做数值评分截 Top100, 再对 Top100 做泰国本地化 + 合规风险语义评分, 最后 AI 评语。',
     '[
       {
         "seq": 1,
@@ -70,7 +76,25 @@ INSERT INTO db_platform.preset_package (
       },
       {
         "seq": 6,
-        "label": "语义评分: 泰国本地化(权重20)",
+        "label": "数值维评分汇总(pre_score)",
+        "blockId": "SCORE_AGGREGATE",
+        "config": {
+          "dimensions": [
+            { "weight": 50, "output_field": "growth_score",     "dimension_name": "销量增长动能" },
+            { "weight": 10, "output_field": "reputation_score", "dimension_name": "用户口碑" }
+          ],
+          "output_field": "pre_score"
+        }
+      },
+      {
+        "seq": 7,
+        "label": "排序取Top100(数值维): pre_score desc",
+        "blockId": "SORT_TOPN",
+        "config": { "sort_by": "pre_score", "order": "desc", "top_n": 100 }
+      },
+      {
+        "seq": 8,
+        "label": "语义评分: 泰国本地化(权重20，只跑Top100)",
         "blockId": "SCORE_SEMANTIC",
         "config": {
           "semantic_prompt": "从泰国本地化适配视角评估该商品：防晒、防水、轻薄、清凉等热带气候适配特征加分；带绿色、数字 4 等当地文化禁忌减分。0-100 分。",
@@ -81,8 +105,8 @@ INSERT INTO db_platform.preset_package (
         }
       },
       {
-        "seq": 7,
-        "label": "语义评分: 平台合规(权重20)",
+        "seq": 9,
+        "label": "语义评分: 平台合规(权重20，只跑Top100)",
         "blockId": "SCORE_SEMANTIC",
         "config": {
           "semantic_prompt": "评估该商品的平台合规风险：明显品牌侵权（出现知名品牌名）、敏感品类（医药、武器、烟酒）越多分越低；安全合规为高分。0-100 分。",
@@ -93,8 +117,8 @@ INSERT INTO db_platform.preset_package (
         }
       },
       {
-        "seq": 8,
-        "label": "评分汇总(total_score)",
+        "seq": 10,
+        "label": "评分汇总(全4维: total_score)",
         "blockId": "SCORE_AGGREGATE",
         "config": {
           "dimensions": [
@@ -107,19 +131,13 @@ INSERT INTO db_platform.preset_package (
         }
       },
       {
-        "seq": 9,
-        "label": "排序取Top100: total_score desc",
-        "blockId": "SORT_TOPN",
-        "config": { "sort_by": "total_score", "order": "desc", "top_n": 100 }
-      },
-      {
-        "seq": 10,
-        "label": "AI 选品评语(中文)",
+        "seq": 11,
+        "label": "AI 选品评语(中文，仅Top100)",
         "blockId": "ANNOTATE_LLM_COMMENT",
         "config": { "language": "zh", "max_chars": 100 }
       },
       {
-        "seq": 11,
+        "seq": 12,
         "label": "输出结果",
         "blockId": "OUTPUT_FINAL",
         "config": { "summary": "TikTok 泰国 TOP100 选品样板（小龙虾工作流）" }
