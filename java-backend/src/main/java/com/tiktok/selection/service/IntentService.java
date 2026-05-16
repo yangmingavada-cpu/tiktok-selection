@@ -288,7 +288,7 @@ public class IntentService {
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(Map.class)
-                    .timeout(Duration.ofSeconds(180))
+                    .timeout(Duration.ofSeconds(360))
                     .block();
             if (result == null) return Collections.emptyMap();
             Object t = result.get("translations");

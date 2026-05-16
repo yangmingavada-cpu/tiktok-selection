@@ -585,7 +585,14 @@ public class BlockOrchestrator {
             log.warn("Translate product texts threw: {}", e.getMessage());
             return;
         }
-        if (translations == null || translations.isEmpty()) return;
+        if (translations == null || translations.isEmpty()) {
+            log.warn("Product text translation returned EMPTY (payload size={}). _zh columns will not appear.", payload.size());
+            return;
+        }
+        long nameCount = translations.values().stream().filter(m -> m.containsKey("name_zh")).count();
+        long descCount = translations.values().stream().filter(m -> m.containsKey("desc_zh")).count();
+        log.info("Product text translation done: payload={}, translated_name={}, translated_desc={}",
+                payload.size(), nameCount, descCount);
 
         boolean anyDescTranslated = false;
         for (Map<String, Object> row : finalData) {

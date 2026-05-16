@@ -457,10 +457,59 @@ def _extract_desc_text(raw: str) -> str:
         return raw
 
 
+_TRANSLATE_BATCH_SIZE = 8
+_TRANSLATE_DESC_MAX_CHARS = 600
+_TRANSLATE_CONCURRENCY = 5
+
+
+async def _translate_one_batch(llm, batch: list[dict]) -> dict[str, dict]:
+    """翻译单个批次（最多 8 条商品），返回该批次的 pid -> {name_zh, desc_zh} 映射。"""
+    items_json = json.dumps(
+        [
+            {
+                "id": str(p.get("product_id", "")),
+                "name": str(p.get("product_name", "")),
+                # 截到 600 字符避免长描述把 LLM 拖慢
+                "desc": _extract_desc_text(p.get("desc_detail", ""))[:_TRANSLATE_DESC_MAX_CHARS],
+            }
+            for p in batch
+        ],
+        ensure_ascii=False,
+    )
+    resp = await llm.ainvoke([
+        {"role": "system", "content": _TRANSLATE_SYSTEM_PROMPT},
+        {"role": "user", "content": items_json},
+    ])
+    text = (resp.content or "").strip()
+    m = re.search(r'\[[\s\S]*\]', text)
+    if not m:
+        logger.warning("translate batch: no JSON array in response")
+        return {}
+    parsed = json.loads(m.group())
+    out: dict[str, dict] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id", ""))
+        if not pid:
+            continue
+        entry: dict = {}
+        name_zh = str(item.get("name_zh", "")).strip()
+        desc_zh = str(item.get("desc_zh", "")).strip()
+        if name_zh:
+            entry["name_zh"] = name_zh
+        if desc_zh:
+            entry["desc_zh"] = desc_zh
+        if entry:
+            out[pid] = entry
+    return out
+
+
 @router.post("/translate-products", response_model=TranslateProductsResponse)
 async def translate_products(request: TranslateProductsRequest):
     """
-    批量翻译商品名 + 商品描述为中文。
+    批量翻译商品名 + 商品描述为中文。批次并发（5 并发）+ 小 batch（8 条/批）+ 截断 desc（600 字），
+    避免单批负载过大让 LLM 处理超 3 分钟导致 Java 端超时。
     返回 product_id -> {name_zh, desc_zh} 映射；翻译失败的商品不会出现在 map 中。
     """
     if not request.products:
@@ -472,52 +521,27 @@ async def translate_products(request: TranslateProductsRequest):
             success=False, translations={}, message="未配置 LLM"
         )
 
-    llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=6000)
+    # max_tokens 缩到 2500：每批 8 条 × ~100 字中文输出 ≈ 1500 tokens 足够
+    llm = create_chat_llm_with_fallbacks(configs, temperature=0.1, max_tokens=2500)
 
-    batch_size = 30
+    batches = [
+        request.products[i:i + _TRANSLATE_BATCH_SIZE]
+        for i in range(0, len(request.products), _TRANSLATE_BATCH_SIZE)
+    ]
+    sem = asyncio.Semaphore(_TRANSLATE_CONCURRENCY)
+
+    async def _run(batch: list[dict]) -> dict[str, dict]:
+        async with sem:
+            try:
+                return await _translate_one_batch(llm, batch)
+            except Exception as e:
+                logger.warning("translate batch failed: %s", e)
+                return {}
+
+    results = await asyncio.gather(*(_run(b) for b in batches))
     translations: dict[str, dict] = {}
-
-    for start in range(0, len(request.products), batch_size):
-        batch = request.products[start:start + batch_size]
-        items_json = json.dumps(
-            [
-                {
-                    "id": str(p.get("product_id", "")),
-                    "name": str(p.get("product_name", "")),
-                    "desc": _extract_desc_text(p.get("desc_detail", "")),
-                }
-                for p in batch
-            ],
-            ensure_ascii=False,
-        )
-        try:
-            resp = await llm.ainvoke([
-                {"role": "system", "content": _TRANSLATE_SYSTEM_PROMPT},
-                {"role": "user", "content": items_json},
-            ])
-            text = (resp.content or "").strip()
-            m = re.search(r'\[[\s\S]*\]', text)
-            if not m:
-                logger.warning("translate batch: no JSON array in response")
-                continue
-            parsed = json.loads(m.group())
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                pid = str(item.get("id", ""))
-                if not pid:
-                    continue
-                entry: dict = {}
-                name_zh = str(item.get("name_zh", "")).strip()
-                desc_zh = str(item.get("desc_zh", "")).strip()
-                if name_zh:
-                    entry["name_zh"] = name_zh
-                if desc_zh:
-                    entry["desc_zh"] = desc_zh
-                if entry:
-                    translations[pid] = entry
-        except Exception as e:
-            logger.warning("translate batch failed (start=%d): %s", start, e)
+    for r in results:
+        translations.update(r)
 
     return TranslateProductsResponse(success=True, translations=translations)
 
