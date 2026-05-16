@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.*;
@@ -22,6 +24,8 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
     private static final Logger log = LoggerFactory.getLogger(LlmCommentAnnotationExecutor.class);
     private static final McpBlock BLOCK_META = LlmCommentAnnotationRequest.class.getAnnotation(McpBlock.class);
     private static final int BATCH_SIZE = 10;
+    /** 批次并发度：5 个 LLM 调用同时在飞 */
+    private static final int BATCH_CONCURRENCY = 5;
     private static final String LLM_CONFIG_KEY = "llm_config";
     private static final String AI_COMMENT_FIELD = "ai_comment";
 
@@ -58,12 +62,21 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
 
         BlockSecurityUtil.validateInputSize(inputData.size());
 
+        // 并发地处理所有批次：批次之间并发，批内按 batchStart 写 output 索引保证顺序
         List<Map<String, Object>> output = new ArrayList<>(inputData);
-        int totalTokens = 0;
-
+        List<Integer> batchStarts = new ArrayList<>();
         for (int i = 0; i < inputData.size(); i += BATCH_SIZE) {
-            totalTokens += processBatch(inputData, output, i, maxChars, language, llmConfig);
+            batchStarts.add(i);
         }
+
+        Integer totalTokens = Flux.fromIterable(batchStarts)
+            .flatMap(
+                bs -> processBatchAsync(inputData, output, bs, maxChars, language, llmConfig),
+                BATCH_CONCURRENCY
+            )
+            .reduce(0, Integer::sum)
+            .blockOptional(Duration.ofMinutes(15))
+            .orElse(0);
 
         List<String> outputFields = new ArrayList<>(context.getAvailableFields());
         if (!outputFields.contains(AI_COMMENT_FIELD)) outputFields.add(AI_COMMENT_FIELD);
@@ -75,9 +88,10 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
     }
 
     @SuppressWarnings("unchecked")
-    private int processBatch(List<Map<String, Object>> inputData, List<Map<String, Object>> output,
-                             int batchStart, int maxChars, String language,
-                             Map<String, Object> llmConfig) {
+    private Mono<Integer> processBatchAsync(List<Map<String, Object>> inputData,
+                                             List<Map<String, Object>> output,
+                                             int batchStart, int maxChars, String language,
+                                             Map<String, Object> llmConfig) {
         List<Map<String, Object>> batch = inputData.subList(batchStart,
             Math.min(batchStart + BATCH_SIZE, inputData.size()));
 
@@ -90,24 +104,25 @@ public class LlmCommentAnnotationExecutor implements BlockExecutor {
         ));
         reqBody.put(LLM_CONFIG_KEY, llmConfig);
 
-        try {
-            Map<String, Object> resp = webClient.post()
-                .uri(pythonAiBaseUrl + "/comment/generate")
-                .bodyValue(reqBody)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .timeout(Duration.ofSeconds(180))
-                .block();
-
-            applyCommentResults(resp, output, batchStart);
-            return extractTokenCount(resp);
-        } catch (Exception e) {
-            log.error("LA01 comment generation failed, batch={}: {}", batchStart / BATCH_SIZE, e.getMessage(), e);
-            for (int j = batchStart; j < Math.min(batchStart + BATCH_SIZE, output.size()); j++) {
-                output.get(j).put(AI_COMMENT_FIELD, "");
-            }
-            return 0;
-        }
+        return webClient.post()
+            .uri(pythonAiBaseUrl + "/comment/generate")
+            .bodyValue(reqBody)
+            .retrieve()
+            .bodyToMono(Map.class)
+            .timeout(Duration.ofSeconds(180))
+            .map(resp -> {
+                applyCommentResults((Map<String, Object>) resp, output, batchStart);
+                return extractTokenCount((Map<String, Object>) resp);
+            })
+            .onErrorResume(e -> {
+                log.error("LA01 comment generation failed, batch={}: {}", batchStart / BATCH_SIZE, e.getMessage(), e);
+                synchronized (output) {
+                    for (int j = batchStart; j < Math.min(batchStart + BATCH_SIZE, output.size()); j++) {
+                        output.get(j).put(AI_COMMENT_FIELD, "");
+                    }
+                }
+                return Mono.just(0);
+            });
     }
 
     @SuppressWarnings("unchecked")

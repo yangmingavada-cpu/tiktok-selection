@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.*;
@@ -21,6 +23,8 @@ public class LlmSemanticScoreExecutor implements BlockExecutor {
     private static final Logger log = LoggerFactory.getLogger(LlmSemanticScoreExecutor.class);
     private static final McpBlock BLOCK_META = LlmSemanticScoreRequest.class.getAnnotation(McpBlock.class);
     private static final int BATCH_SIZE = 5;
+    /** 批次并发度：5 个 LLM 调用同时在飞，比串行快约 5 倍 */
+    private static final int BATCH_CONCURRENCY = 5;
     private static final String LLM_CONFIG_KEY = "llm_config";
 
     private final WebClient webClient;
@@ -54,12 +58,21 @@ public class LlmSemanticScoreExecutor implements BlockExecutor {
 
         BlockSecurityUtil.validateInputSize(inputData.size());
 
+        // 并发地处理所有批次：批内顺序保持（按 batchStart 写入 output 索引），但批次之间并发
         List<Map<String, Object>> output = new ArrayList<>(inputData);
-        int totalTokens = 0;
-
+        List<Integer> batchStarts = new ArrayList<>();
         for (int i = 0; i < inputData.size(); i += BATCH_SIZE) {
-            totalTokens += processBatch(inputData, output, i, semanticPrompt, maxScore, llmConfig, outputField);
+            batchStarts.add(i);
         }
+
+        Integer totalTokens = Flux.fromIterable(batchStarts)
+            .flatMap(
+                bs -> processBatchAsync(inputData, output, bs, semanticPrompt, maxScore, llmConfig, outputField),
+                BATCH_CONCURRENCY
+            )
+            .reduce(0, Integer::sum)
+            .blockOptional(Duration.ofMinutes(15))
+            .orElse(0);
 
         List<String> outputFields = new ArrayList<>(context.getAvailableFields());
         if (!outputFields.contains(outputField)) outputFields.add(outputField);
@@ -71,9 +84,10 @@ public class LlmSemanticScoreExecutor implements BlockExecutor {
     }
 
     @SuppressWarnings("unchecked")
-    private int processBatch(List<Map<String, Object>> inputData, List<Map<String, Object>> output,
-                             int batchStart, String semanticPrompt, int maxScore,
-                             Map<String, Object> llmConfig, String outputField) {
+    private Mono<Integer> processBatchAsync(List<Map<String, Object>> inputData,
+                                             List<Map<String, Object>> output,
+                                             int batchStart, String semanticPrompt, int maxScore,
+                                             Map<String, Object> llmConfig, String outputField) {
         List<Map<String, Object>> batch = inputData.subList(batchStart,
             Math.min(batchStart + BATCH_SIZE, inputData.size()));
 
@@ -83,24 +97,25 @@ public class LlmSemanticScoreExecutor implements BlockExecutor {
         reqBody.put("max_score", maxScore);
         reqBody.put(LLM_CONFIG_KEY, llmConfig);
 
-        try {
-            Map<String, Object> resp = webClient.post()
-                .uri(pythonAiBaseUrl + "/score/evaluate")
-                .bodyValue(reqBody)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .timeout(Duration.ofSeconds(60))
-                .block();
-
-            applyScoreResults(resp, output, batchStart, outputField);
-            return extractTokenCount(resp);
-        } catch (Exception e) {
-            log.error("SC02 batch scoring failed, batch={}: {}", batchStart / BATCH_SIZE, e.getMessage(), e);
-            for (int j = batchStart; j < Math.min(batchStart + BATCH_SIZE, output.size()); j++) {
-                output.get(j).put(outputField, 0);
-            }
-            return 0;
-        }
+        return webClient.post()
+            .uri(pythonAiBaseUrl + "/score/evaluate")
+            .bodyValue(reqBody)
+            .retrieve()
+            .bodyToMono(Map.class)
+            .timeout(Duration.ofSeconds(180))
+            .map(resp -> {
+                applyScoreResults((Map<String, Object>) resp, output, batchStart, outputField);
+                return extractTokenCount((Map<String, Object>) resp);
+            })
+            .onErrorResume(e -> {
+                log.error("SC02 batch scoring failed, batch={}: {}", batchStart / BATCH_SIZE, e.getMessage(), e);
+                synchronized (output) {
+                    for (int j = batchStart; j < Math.min(batchStart + BATCH_SIZE, output.size()); j++) {
+                        output.get(j).put(outputField, 0);
+                    }
+                }
+                return Mono.just(0);
+            });
     }
 
     @SuppressWarnings("unchecked")
