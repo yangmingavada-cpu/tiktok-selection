@@ -186,6 +186,7 @@ public class BlockOrchestrator {
         m.put("profit_margin_est", "预估利润率"); m.put("contact_info", "联系方式");
         m.put("audience_demographics", "受众画像"); m.put("top_categories", "主要类目");
         m.put("llm_comment", "AI评语");
+        m.put("product_link", "商品链接");
         FIELD_LABELS = Map.copyOf(m);
     }
 
@@ -790,9 +791,12 @@ public class BlockOrchestrator {
      * 根据字段名列表构建前端 dims 定义，推断基础类型。
      * Label 查找优先级：dynamicLabels（用户自定义）> FIELD_LABELS（静态映射）> 字段 id 本身。
      */
+    private static final Set<String> PRICE_DIM_IDS = Set.of("min_price", "max_price", "spu_avg_price");
+
     private List<Map<String, Object>> buildDims(List<String> fields, Map<String, String> dynamicLabels) {
         if (fields == null) return new ArrayList<>();
-        return fields.stream().map(f -> {
+        List<Map<String, Object>> dims = new ArrayList<>(fields.size() + 1);
+        for (String f : fields) {
             Map<String, Object> dim = LinkedHashMap.newLinkedHashMap(4);
             dim.put("id",    f);
             String label = dynamicLabels != null ? dynamicLabels.get(f) : null;
@@ -801,8 +805,25 @@ public class BlockOrchestrator {
             }
             dim.put("label", label);
             dim.put("type",  inferFieldType(f));
-            return dim;
-        }).toList();
+            dims.add(dim);
+        }
+        // 商品数据：product_id 存在时自动插入"商品链接"虚拟列，位于第一个价格列前
+        if (fields.contains("product_id")) {
+            Map<String, Object> linkDim = LinkedHashMap.newLinkedHashMap(3);
+            linkDim.put("id",    "product_link");
+            linkDim.put("label", FIELD_LABELS.get("product_link"));
+            linkDim.put("type",  "link");
+            int priceIdx = -1;
+            for (int i = 0; i < dims.size(); i++) {
+                if (PRICE_DIM_IDS.contains(String.valueOf(dims.get(i).get("id")))) {
+                    priceIdx = i;
+                    break;
+                }
+            }
+            if (priceIdx >= 0) dims.add(priceIdx, linkDim);
+            else dims.add(linkDim);
+        }
+        return dims;
     }
 
     /**
@@ -857,6 +878,14 @@ public class BlockOrchestrator {
             if (skusRaw != null) {
                 String skusText = parseSkusSummary(skusRaw);
                 if (skusText != null) copy.put("skus", skusText);
+            }
+            // 商品链接（用原始 region 代码拼接）
+            Object pid = copy.get("product_id");
+            Object regionCode = copy.get("region_code");  // translateForDisplay 已设
+            if (pid != null && regionCode != null) {
+                copy.put("product_link",
+                        "https://www.tiktok.com/view/product/" + pid
+                                + "?share_region=" + regionCode + "&utm_source=copy");
             }
             result.add(copy);
         }
