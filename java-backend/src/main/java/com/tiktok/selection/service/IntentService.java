@@ -54,14 +54,6 @@ public class IntentService {
     @Value("${python.ai.base-url:http://localhost:8000}")
     private String pythonAiBaseUrl;
 
-    /** Agent 构建积木链的 token 预算，防止 LLM 无限循环 */
-    @Value("${ai.budget.intent-parse-token-quota:200000}")
-    private int intentTokenQuota;
-
-    /** 方案解读阶段的 token 预算，避免报告生成过长 */
-    @Value("${ai.budget.intent-interpret-token-quota:6000}")
-    private int interpretTokenQuota;
-
     /** 审计调用超时（秒），免费/慢模型需要更长时间 */
     @Value("${ai.audit.timeout-seconds:90}")
     private int auditTimeoutSeconds;
@@ -145,7 +137,6 @@ public class IntentService {
             requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
         }
         requestBody.put("mcp_endpoint", mcpEndpoint);
-        requestBody.put("token_quota", intentTokenQuota);
         if (qaHistory != null && !qaHistory.isEmpty()) {
             requestBody.put("qa_history", qaHistory);
         }
@@ -174,13 +165,6 @@ public class IntentService {
             }
 
             int tokensUsed = result.get("llm_tokens_used") instanceof Number n ? n.intValue() : 0;
-            String resultType = result.get("type") instanceof String s ? s : null;
-            if (tokensUsed >= intentTokenQuota && !"needs_input".equals(resultType)) {
-                result.put("success", false);
-                result.put("message", "AI 解析超出安全预算，请补充更明确的需求后重试");
-                log.warn("Intent parse exceeded token quota: sessionId={}, tokens={}, quota={}",
-                        sessionId, tokensUsed, intentTokenQuota);
-            }
 
             // needs_input: AI主动暂停询问用户，读取当前partial链写入响应，再清理会话
             if ("needs_input".equals(result.get("type"))) {
@@ -346,7 +330,6 @@ public class IntentService {
         if (llmConfigs.size() > 1) {
             requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
         }
-        requestBody.put("token_quota", interpretTokenQuota);
 
         try {
             Map<String, Object> result = webClient.post()
@@ -356,12 +339,6 @@ public class IntentService {
                     .bodyToMono(Map.class)
                     .timeout(Duration.ofSeconds(60))
                     .block();
-            int tokensUsed = result != null && result.get("llm_tokens_used") instanceof Number n ? n.intValue() : 0;
-            if (result != null && tokensUsed >= interpretTokenQuota) {
-                result.put("success", false);
-                result.put("message", "AI 方案解读超出安全预算，请精简方案后重试");
-                log.warn("Interpret exceeded token quota: tokens={}, quota={}", tokensUsed, interpretTokenQuota);
-            }
             return result != null ? result : Map.of("success", false, "interpretation", "");
         } catch (Exception e) {
             log.error("Interpret block chain failed: {}", e.getMessage());
@@ -391,7 +368,6 @@ public class IntentService {
         if (llmConfigs.size() > 1) {
             requestBody.put("llm_config_fallbacks", llmConfigs.subList(1, llmConfigs.size()));
         }
-        requestBody.put("token_quota", interpretTokenQuota);
         if (userMemories != null) {
             requestBody.put("user_memories", userMemories);
         }

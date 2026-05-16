@@ -79,10 +79,6 @@ public class BlockOrchestrator {
     private final CategoryService categoryService;
     private final MemoryFileService memoryFileService;
 
-    /** 执行阶段累计 LLM token 预算，覆盖语义评分和 AI 评语等执行型能力 */
-    @Value("${ai.budget.session-execute-token-quota:120000}")
-    private long sessionExecuteLlmTokenQuota;
-
     public BlockOrchestrator(BlockExecutorRegistry blockExecutorRegistry,
                              SseEmitterManager sseEmitterManager,
                              SessionMapper sessionMapper,
@@ -322,7 +318,6 @@ public class BlockOrchestrator {
                 quotaService.checkQuota(session.getUserId(), 1);
                 if (LLM_BLOCK_IDS.contains(blockId)) {
                     quotaService.checkLlmRateLimit(session.getUserId());
-                    ensureExecutionTokenBudget(sessionId, state.totalTokens, blockId, seq);
                 }
 
                 BlockResult result = executeBlock(session, seq, blockId, config,
@@ -339,9 +334,6 @@ public class BlockOrchestrator {
                 }
 
                 applyStepResult(state, result);
-                if (LLM_BLOCK_IDS.contains(blockId)) {
-                    ensureExecutionTokenBudget(sessionId, state.totalTokens, blockId, seq);
-                }
 
                 // 每步更新 currentView（持久化中间结果，前端刷新可看到）
                 List<Map<String, Object>> stepDims = buildDims(state.availableFields, state.dynamicLabels);
@@ -646,19 +638,6 @@ public class BlockOrchestrator {
         session.setLlmTotalTokens(totalTokens);
         session.setUpdateTime(LocalDateTime.now());
         sessionMapper.updateById(session);
-    }
-
-    private void ensureExecutionTokenBudget(String sessionId, long usedTokens, String blockId, int seq) {
-        if (sessionExecuteLlmTokenQuota <= 0 || usedTokens < sessionExecuteLlmTokenQuota) {
-            return;
-        }
-        log.warn("Execution LLM token quota exceeded: sessionId={}, step={}, blockId={}, used={}, quota={}",
-                sessionId, seq, blockId, usedTokens, sessionExecuteLlmTokenQuota);
-        throw new BusinessException(
-                ErrorCode.INVALID_USER_INPUT,
-                String.format("执行阶段已达到LLM安全预算（%d/%d），请缩小语义评分或AI评语范围后重试",
-                        usedTokens, sessionExecuteLlmTokenQuota)
-        );
     }
 
     private void sendStepStart(String sessionId, int seq, int total, String blockId) {

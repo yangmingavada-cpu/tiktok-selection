@@ -818,9 +818,6 @@ class AgentService:
             return END
         if state.get("chain_length", 0) >= MAX_CHAIN_LENGTH:
             return END
-        quota = state.get("token_quota")
-        if quota and state.get("total_tokens", 0) >= quota:
-            return END
         return "fetch_tools"
 
     # ------------------------------------------------------------------
@@ -983,12 +980,6 @@ class AgentService:
         if final_state.get("chain_length", 0) >= MAX_CHAIN_LENGTH:
             return {"success": False, "type": "block_chain",
                     "message": f"积木链长度已达上限（{MAX_CHAIN_LENGTH}块），终止构建", **common}
-
-        quota_val = final_state.get("token_quota")
-        if quota_val and total_tokens >= quota_val:
-            return {"success": False, "type": "block_chain",
-                    "message": f"Token配额已用尽（{total_tokens}/{quota_val}），积木链未完成",
-                    **common}
 
         last_msg = final_state["messages"][-1]
         return {"success": True, "type": "block_chain",

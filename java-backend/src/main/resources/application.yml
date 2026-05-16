@@ -100,8 +100,5 @@ logging:
     com.tiktok.selection: DEBUG
     com.baomidou.mybatisplus: DEBUG
 
-ai:
-  budget:
-    intent-parse-token-quota: ${INTENT_PARSE_TOKEN_QUOTA:200000}
-    intent-interpret-token-quota: ${INTENT_INTERPRET_TOKEN_QUOTA:6000}
-    session-execute-token-quota: ${SESSION_EXECUTE_LLM_TOKEN_QUOTA:1200000}
+# 注：会话级 token 预算护栏已从代码层面整体移除（main_agent / interpret_agent / BlockOrchestrator）。
+# 累计 token 仍然追踪并落库到 session.llm_total_tokens，仅作为观测/对账数据，不再熔断。
