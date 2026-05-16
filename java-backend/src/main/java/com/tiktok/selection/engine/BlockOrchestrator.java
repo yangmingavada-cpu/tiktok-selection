@@ -881,11 +881,11 @@ public class BlockOrchestrator {
             }
             // 商品链接（用原始 region 代码拼接）
             Object pid = copy.get("product_id");
-            Object regionCode = copy.get("region_code");  // translateForDisplay 已设
-            if (pid != null && regionCode != null) {
+            Object rowRegionCode = copy.get("region_code");  // 上面 if 分支已设
+            if (pid != null && rowRegionCode != null) {
                 copy.put("product_link",
                         "https://www.tiktok.com/view/product/" + pid
-                                + "?share_region=" + regionCode + "&utm_source=copy");
+                                + "?share_region=" + rowRegionCode + "&utm_source=copy");
             }
             result.add(copy);
         }
