@@ -11,8 +11,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * DS01 - 商品列表筛选 (Product List Filter).
@@ -54,6 +56,10 @@ public class ProductListFilterExecutor implements BlockExecutor {
             int totalPages = req.getEffectiveTotalPages();
 
             List<Map<String, Object>> allData = new ArrayList<>();
+            // EchoTik 分页可能在不同页返回相同 product_id（时间窗滑动 / 排序不稳定）。
+            // 在入口处按 product_id 去重，避免下游 FILTER/SCORE/AI 评语对同一商品重复处理（也省 LLM token）。
+            Set<String> seenProductIds = new HashSet<>();
+            int duplicateCount = 0;
             int apiCalls = 0;
             int consecutiveFailures = 0;
             for (int page = 1; page <= totalPages; page++) {
@@ -77,20 +83,28 @@ public class ProductListFilterExecutor implements BlockExecutor {
                     }
                     continue;
                 }
-                boolean lastPage = pageData == null || pageData.isEmpty() || pageData.size() < pageSize;
+                int rawPageSize = pageData != null ? pageData.size() : 0;
+                boolean lastPage = pageData == null || pageData.isEmpty() || rawPageSize < pageSize;
                 if (pageData != null) {
-                    allData.addAll(pageData);
+                    for (Map<String, Object> row : pageData) {
+                        Object pid = row.get("product_id");
+                        if (pid != null && !seenProductIds.add(pid.toString())) {
+                            duplicateCount++;
+                            continue;
+                        }
+                        allData.add(row);
+                    }
                 }
-                log.debug("[{}] Page {}/{} fetched, items={}", BLOCK_META.blockId(), page, totalPages,
-                    pageData != null ? pageData.size() : 0);
+                log.debug("[{}] Page {}/{} fetched, items={} (unique so far={})",
+                    BLOCK_META.blockId(), page, totalPages, rawPageSize, allData.size());
                 if (lastPage) {
                     break;
                 }
             }
 
             long durationMs = System.currentTimeMillis() - startTime;
-            log.info("[{}] Execution completed, outputCount={}, pages={}, duration={}ms",
-                BLOCK_META.blockId(), allData.size(), apiCalls, durationMs);
+            log.info("[{}] Execution completed, outputCount={}, dedupRemoved={}, pages={}, duration={}ms",
+                BLOCK_META.blockId(), allData.size(), duplicateCount, apiCalls, durationMs);
 
             BlockResult result = BlockResult.success(allData, new ArrayList<>(ProductListFilterRequest.OUTPUT_FIELDS),
                 BLOCK_META.outputType(), inputCount, allData.size(), durationMs);

@@ -13,8 +13,10 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Component
 public class SortTopNTransformExecutor implements BlockExecutor {
@@ -53,8 +55,30 @@ public class SortTopNTransformExecutor implements BlockExecutor {
             }
             sorted.sort(comparator);
 
-            int limit = Math.min(topN, sorted.size());
-            List<Map<String, Object>> outputData = new ArrayList<>(sorted.subList(0, limit));
+            // 兜底去重：SortTopNTransformRequest.deduplicate 默认 true。
+            // 即使 SOURCE_PRODUCT_LIST 已去重，这里再扫一遍防止其他来源/拼接路径漏网。
+            List<Map<String, Object>> deduped;
+            if (Boolean.FALSE.equals(req.deduplicate)) {
+                deduped = sorted;
+            } else {
+                Set<String> seen = HashSet.newHashSet(sorted.size());
+                deduped = new ArrayList<>(sorted.size());
+                for (Map<String, Object> row : sorted) {
+                    Object pid = row.get("product_id");
+                    if (pid == null) pid = row.get("id");  // 兜底其他实体类型
+                    String key = pid != null ? pid.toString() : null;
+                    if (key == null || seen.add(key)) {
+                        deduped.add(row);
+                    }
+                }
+                if (deduped.size() < sorted.size()) {
+                    log.info("[{}] Deduped by product_id: {} -> {}",
+                        BLOCK_META.blockId(), sorted.size(), deduped.size());
+                }
+            }
+
+            int limit = Math.min(topN, deduped.size());
+            List<Map<String, Object>> outputData = new ArrayList<>(deduped.subList(0, limit));
 
             List<String> outputFields = context.getAvailableFields() != null
                 ? new ArrayList<>(context.getAvailableFields()) : new ArrayList<>();
