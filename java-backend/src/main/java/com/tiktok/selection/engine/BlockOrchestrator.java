@@ -847,9 +847,83 @@ public class BlockOrchestrator {
                     copy.put(key, categoryNames.getOrDefault(catId, catId));
                 }
             }
+            // desc_detail / skus 把 JSON 解析成可读文本，避免前端表格显示 [{"type":"text","text":"..."}]
+            Object descRaw = copy.get("desc_detail");
+            if (descRaw != null) {
+                String descText = parseDescDetailText(descRaw);
+                if (descText != null) copy.put("desc_detail", descText);
+            }
+            Object skusRaw = copy.get("skus");
+            if (skusRaw != null) {
+                String skusText = parseSkusSummary(skusRaw);
+                if (skusText != null) copy.put("skus", skusText);
+            }
             result.add(copy);
         }
         return result;
+    }
+
+    /**
+     * 把 desc_detail 字段（EchoTik 返回的 JSON 数组形如 [{"type":"text","text":"..."}, ...]）
+     * 解析成纯文本拼接，去掉 JSON 包装。失败时返回原值的 toString。
+     */
+    @SuppressWarnings("unchecked")
+    private static String parseDescDetailText(Object raw) {
+        if (raw == null) return null;
+        // 已经是 List 形式（Jackson 自动解析 jsonb 列）
+        if (raw instanceof List<?> list) {
+            return extractTextFromItems(list);
+        }
+        // 字符串：可能是 JSON-string，也可能就是普通文本
+        String s = raw.toString().trim();
+        if (!s.startsWith("[")) return s;
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+            List<?> list = mapper.readValue(s, List.class);
+            return extractTextFromItems(list);
+        } catch (Exception e) {
+            return s;  // 解析失败回退原文
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String extractTextFromItems(List<?> items) {
+        StringBuilder sb = new StringBuilder();
+        for (Object item : items) {
+            if (item instanceof Map<?, ?> map) {
+                Object t = ((Map<String, Object>) map).get("text");
+                if (t != null) {
+                    if (sb.length() > 0) sb.append(' ');
+                    sb.append(t);
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 把 skus 字段（JSON 数组形如 [{"sku_id":..., "price":..., "stock":...}, ...]）
+     * 转成简短摘要，如"共 3 个规格"。前端要详细信息可点击行展开。
+     */
+    @SuppressWarnings("unchecked")
+    private static String parseSkusSummary(Object raw) {
+        if (raw == null) return null;
+        List<?> items = null;
+        if (raw instanceof List<?> list) {
+            items = list;
+        } else {
+            String s = raw.toString().trim();
+            if (!s.startsWith("[")) return s;
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper =
+                        new com.fasterxml.jackson.databind.ObjectMapper();
+                items = mapper.readValue(s, List.class);
+            } catch (Exception e) {
+                return s;
+            }
+        }
+        return items.isEmpty() ? "" : "共 " + items.size() + " 个规格";
     }
 
     private String inferFieldType(String fieldName) {
